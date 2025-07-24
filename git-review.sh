@@ -40,8 +40,9 @@ SCRIPT_URL="https://gist.githubusercontent.com/schultzisaiah/f25734903c466454c4f
 
 # --- Self-Update Function ---
 checkForUpdates() {
-    # Get the path of the currently running script.
-    local script_path="$0"
+    # Get the absolute path of the currently running script using a zsh-native method.
+    # This is more reliable than $0 when the script is in the PATH.
+    local script_path="${(%):-%x}"
     # Create a temporary file to download the latest version.
     local temp_file=$(mktemp)
 
