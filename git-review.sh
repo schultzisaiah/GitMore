@@ -329,15 +329,18 @@ else
         # Construct the comment body with real newlines
         COMMENT_BODY="**🤖 Review Update**
 
-This review branch has been updated. The link below provides a visual diff of all file changes in this update.
-
-* [**View file changes**](https://github.com/$GITHUB_REPO/compare/$OLD_HEAD...$NEW_HEAD)
-  *Note: The commit list in the comparison view may be noisy due to the branch being rebuilt. The list of new commits below is the most accurate summary of what was added.*"
+This review branch has been updated."
 
         if [ ${#NEWLY_ADDED_COMMITS[@]} -gt 0 ]; then
+            PR_NUMBER=$(gh pr view "$EXISTING_PR_URL" --json number --jq '.number')
+            first_new_commit=${NEWLY_ADDED_COMMITS[1]}
+            last_new_commit=${NEWLY_ADDED_COMMITS[-1]}
+
             COMMENT_BODY+="
 
-**New commits added in this update:**
+* [**View changes for new commits in this update**](https://github.com/$GITHUB_REPO/pull/$PR_NUMBER/files/$first_new_commit^..$last_new_commit)
+
+**New commits added:**
 "
             for hash in "${NEWLY_ADDED_COMMITS[@]}"; do
                 commit_line=$(git show -s --format='* `%h` %s' "$hash")
@@ -346,6 +349,8 @@ This review branch has been updated. The link below provides a visual diff of al
             done
         else
             COMMENT_BODY+="
+
+* [**View all file changes in this update**](https://github.com/$GITHUB_REPO/compare/$OLD_HEAD...$NEW_HEAD)
 
 No new commits were added, but the branch was rebuilt (e.g., to resolve conflicts or reorder commits)."
         fi
