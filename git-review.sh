@@ -46,9 +46,9 @@ checkForUpdates() {
     # Create a temporary file to download the latest version.
     local temp_file=$(mktemp)
 
-    # Download the latest version of the script.
-    if ! curl -sSL "$SCRIPT_URL" -o "$temp_file"; then
-        # If download fails, just continue with the current version.
+    # Download the latest version of the script with a 3-second timeout.
+    if ! curl -sSL --max-time 3 "$SCRIPT_URL" -o "$temp_file"; then
+        # If download fails or times out, just continue with the current version.
         echo "⚠️  Warning: Could not check for script updates. Continuing..."
         rm "$temp_file"
         return
