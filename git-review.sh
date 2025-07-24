@@ -121,7 +121,8 @@ if [ -n "$2" ]; then
     echo "➡️ Using specified main branch: $MAIN_BRANCH"
 else
     echo "🔎 Auto-detecting default branch from remote 'origin'..."
-    git fetch origin
+    # Fetch with --prune to remove stale remote-tracking branches.
+    git fetch origin --prune
     DETECTED_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
     if [ -n "$DETECTED_BRANCH" ] && [ "$DETECTED_BRANCH" != "(unknown)" ]; then
         MAIN_BRANCH="$DETECTED_BRANCH"
