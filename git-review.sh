@@ -29,8 +29,9 @@
 # --- Configuration ---
 # The prefix for the review branches.
 REVIEW_BRANCH_PREFIX="CR"
-# The standard prefix for your tickets (e.g., "AB", "JIRA").
-TICKET_PREFIX="AB"
+# The standard prefix for your tickets, including any separator.
+# Example: "AB#", "JIRA-", "TICKET-"
+TICKET_PREFIX="AB#"
 
 
 # --- Script Logic ---
@@ -52,7 +53,7 @@ if [ -z "$TICKET_NUMBER" ]; then
     exit 1
 fi
 # Reconstruct the ticket ID into a canonical format.
-CANONICAL_TICKET_ID="${TICKET_PREFIX}#${TICKET_NUMBER}"
+CANONICAL_TICKET_ID="${TICKET_PREFIX}${TICKET_NUMBER}"
 # Create a sanitized version for the branch name.
 SANITIZED_TICKET_ID=$(echo "$CANONICAL_TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
 REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
