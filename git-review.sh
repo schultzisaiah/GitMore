@@ -8,9 +8,12 @@
 # ticket ID. It intelligently combines commits from main and the remote review
 # branch, and then creates/updates a PR, auto-assigning commit authors.
 #
+# It also includes a self-updating mechanism.
+#
 # DEPENDENCIES:
 # - git
 # - GitHub CLI (gh). Install from: https://cli.github.com/
+# - curl
 #
 # SETUP:
 # 1. Save this script as 'git-review' in a directory on your PATH.
@@ -32,11 +35,46 @@ REVIEW_BRANCH_PREFIX="CR"
 # The standard prefix for your tickets, including any separator.
 # Example: "AB#", "JIRA-", "TICKET-"
 TICKET_PREFIX="AB#"
+# The URL to the raw script content for self-updating.
+SCRIPT_URL="https://gist.githubusercontent.com/schultzisaiah/f25734903c466454c4f385032d3eba47/raw"
 
+# --- Self-Update Function ---
+checkForUpdates() {
+    # Get the path of the currently running script.
+    local script_path="$0"
+    # Create a temporary file to download the latest version.
+    local temp_file=$(mktemp)
+
+    # Download the latest version of the script.
+    if ! curl -sSL "$SCRIPT_URL" -o "$temp_file"; then
+        # If download fails, just continue with the current version.
+        echo "⚠️  Warning: Could not check for script updates. Continuing..."
+        rm "$temp_file"
+        return
+    fi
+
+    # Check if there's a difference between the current script and the new one.
+    if ! diff -q "$script_path" "$temp_file" >/dev/null; then
+        echo "✨ A new version of this script is available."
+        echo "   Updating now..."
+        # Replace the old script with the new one.
+        mv "$temp_file" "$script_path"
+        # Ensure the new script is executable.
+        chmod +x "$script_path"
+        echo "✅ Script updated successfully. Please re-run your command."
+        exit 0
+    fi
+
+    # No updates, clean up the temporary file.
+    rm "$temp_file"
+}
 
 # --- Script Logic ---
 
-# 1. Input Validation
+# 1. Check for updates before doing anything else.
+checkForUpdates
+
+# 2. Input Validation
 if [ -z "$1" ]; then
   echo "❌ Error: No Ticket ID provided."
   echo "Usage: $0 \"<TicketID>\" [MainBranch]"
@@ -44,35 +82,30 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-# 2. Input Processing and Normalization
+# 3. Input Processing and Normalization
 echo "⚙️  Normalizing Ticket ID..."
-# Extract just the numbers from the input string.
 TICKET_NUMBER=$(echo "$1" | tr -dc '0-9')
 if [ -z "$TICKET_NUMBER" ]; then
     echo "❌ Error: Could not find any numbers in the provided Ticket ID '$1'."
     exit 1
 fi
-# Reconstruct the ticket ID into a canonical format.
 CANONICAL_TICKET_ID="${TICKET_PREFIX}${TICKET_NUMBER}"
-# Create a sanitized version for the branch name.
 SANITIZED_TICKET_ID=$(echo "$CANONICAL_TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
 REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 
 echo "🚀 Starting review preparation for Ticket ID: $CANONICAL_TICKET_ID"
 echo "🌿 Review branch will be: $REVIEW_BRANCH_NAME"
 
-# 3. Pre-flight Checks
-# Check for uncommitted changes in the workspace.
+# 4. Pre-flight Checks
 if [ -n "$(git status --porcelain)" ]; then
   echo "❌ Error: Your workspace has uncommitted changes."
   echo "Please commit, stash, or discard your changes before running this script."
   exit 1
 fi
-# Check for gh dependency.
 if ! command -v gh &> /dev/null; then echo "❌ Error: GitHub CLI ('gh') is not installed."; exit 1; fi
 echo "✅ Workspace is clean. Dependencies are met."
 
-# 4. Determine Main Branch
+# 5. Determine Main Branch
 MAIN_BRANCH=""
 if [ -n "$2" ]; then
     MAIN_BRANCH="$2"
@@ -102,7 +135,7 @@ if [ -z "$MAIN_BRANCH" ]; then
     exit 1
 fi
 
-# 5. Auto-detect GitHub Repo
+# 6. Auto-detect GitHub Repo
 echo "🔎 Auto-detecting GitHub repository..."
 GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null)
 if [ -z "$GIT_REMOTE_URL" ]; then echo "❌ Error: Could not determine the remote 'origin' URL."; exit 1; fi
@@ -110,16 +143,15 @@ GITHUB_REPO=$(echo "$GIT_REMOTE_URL" | sed -e 's/.*github.com[\/:]//' -e 's/\.gi
 if [ -z "$GITHUB_REPO" ]; then echo "❌ Error: Could not parse GitHub repo from URL: $GIT_REMOTE_URL"; exit 1; fi
 echo "✅ Detected repository: $GITHUB_REPO"
 
-# 6. Ensure local main branch is up-to-date
+# 7. Ensure local main branch is up-to-date
 echo "🔄 Pulling latest changes for '$MAIN_BRANCH'..."
 if ! git checkout "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
     echo "❌ Error: Could not check out or pull latest from '$MAIN_BRANCH'."; exit 1
 fi
 echo "✅ '$MAIN_BRANCH' is up-to-date."
 
-# 7. Find all commits related to the ticket from ALL sources
+# 8. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
-# Use the canonical ticket ID for the search, and the -i flag for case-insensitivity.
 MAIN_BRANCH_COMMITS=$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
 REMOTE_BRANCH_COMMITS=""
@@ -138,13 +170,13 @@ echo "🔍 Found the following unique commits to be cherry-picked:"
 COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
 
-# 8. Determine the starting point for the new branch
+# 9. Determine the starting point for the new branch
 FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
 STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
 if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not determine parent of first commit."; exit 1; fi
 echo "🌱 Creating review branch from starting point: $(git show -s --format='%h %s' "$STARTING_POINT_HASH")"
 
-# 9. Create or reset the review branch
+# 10. Create or reset the review branch
 if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
   echo "♻️ Deleting existing local branch '$REVIEW_BRANCH_NAME' to rebuild it."
   git branch -D "$REVIEW_BRANCH_NAME"
@@ -152,7 +184,7 @@ fi
 git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to create new branch '$REVIEW_BRANCH_NAME'."; exit 1; fi
 
-# 10. Cherry-pick the commits
+# 11. Cherry-pick the commits
 echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
 for hash in "${COMMIT_ARRAY[@]}"; do
   echo "  -> Picking $(git show -s --format='%h' "$hash")"
@@ -164,13 +196,13 @@ for hash in "${COMMIT_ARRAY[@]}"; do
 done
 echo "✅ All commits successfully cherry-picked."
 
-# 11. Push the branch to the remote
+# 12. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
 git push -f origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
 
-# 12. Find commit authors and map to GitHub users
+# 13. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
 ASSIGNEES=()
 for hash in "${COMMIT_ARRAY[@]}"; do
@@ -184,7 +216,7 @@ done
 UNIQUE_ASSIGNEES=("${(@u)ASSIGNEES}")
 ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 
-# 13. Create or update the Pull Request
+# 14. Create or update the Pull Request
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
@@ -232,3 +264,4 @@ fi
 # Go back to the main branch for safety.
 echo "↩️ Returning to '$MAIN_BRANCH' branch."
 git checkout "$MAIN_BRANCH" > /dev/null 2>&1
+
