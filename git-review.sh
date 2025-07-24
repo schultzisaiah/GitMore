@@ -79,7 +79,6 @@ if [ -z "$1" ]; then
 fi
 
 # 3. Input Processing and Normalization
-echo "⚙️  Normalizing Ticket ID..."
 TICKET_NUMBER=$(echo "$1" | tr -dc '0-9')
 if [ -z "$TICKET_NUMBER" ]; then
     echo "❌ Error: Could not find any numbers in the provided Ticket ID '$1'."
@@ -87,6 +86,7 @@ if [ -z "$TICKET_NUMBER" ]; then
 fi
 CANONICAL_TICKET_ID="${TICKET_PREFIX}${TICKET_NUMBER}"
 SANITIZED_TICKET_ID=$(echo "$CANONICAL_TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
+echo "⚙️  Normalized Ticket ID: $SANITIZED_TICKET_ID"
 REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 
 echo "🚀 Starting review preparation for Ticket ID: $CANONICAL_TICKET_ID"
