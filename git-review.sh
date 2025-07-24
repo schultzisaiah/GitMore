@@ -162,15 +162,34 @@ echo "✅ '$MAIN_BRANCH' is up-to-date."
 
 # 8. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
-# Source 1: Tagged commits from the main branch, with revert handling.
-ALL_TAGGED_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
+# Source 1: Tagged commits from the main branch
+MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
+
+# Source 2: All commits from an existing review branch (if it exists)
+REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
+REMOTE_BRANCH_COMMITS_RAW=()
+OLD_HEAD=$(git rev-parse "$REMOTE_REVIEW_BRANCH" 2>/dev/null)
+if [ -n "$OLD_HEAD" ]; then
+    echo "  - Found existing remote review branch. Preserving its commits."
+    MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
+    if [ -n "$MERGE_BASE" ]; then
+        REMOTE_BRANCH_COMMITS_RAW=(${(f)"$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")"})
+    fi
+else
+    echo "  - No existing remote review branch found."
+fi
+
+# Combine all potential commit hashes into a single pool
+ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS_RAW[@]}")
+
+# Analyze the entire pool for reverted commits
 typeset -A commits_to_exclude
 echo "  - Analyzing for reverted commits..."
-for hash in "${ALL_TAGGED_COMMITS[@]}"; do
+for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+    if [ -z "$hash" ]; then continue; fi
     commit_msg=$(git show -s --format=%s "$hash")
     if [[ "$commit_msg" == "Revert "* ]]; then
         commits_to_exclude[$hash]=1
-        # Find the hash of the commit this one reverts from the commit body.
         reverted_hash=$(git show -s --format=%b "$hash" | grep 'This reverts commit' | sed 's/.*This reverts commit \([0-9a-f]\{40\}\)\..*/\1/')
         if [ -n "$reverted_hash" ]; then
             commits_to_exclude[$reverted_hash]=1
@@ -179,44 +198,41 @@ for hash in "${ALL_TAGGED_COMMITS[@]}"; do
     fi
 done
 
-MAIN_BRANCH_COMMITS=()
-for hash in "${ALL_TAGGED_COMMITS[@]}"; do
+CANDIDATES_AFTER_REVERTS=()
+for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
     if [[ ! -v commits_to_exclude[$hash] ]]; then
-        MAIN_BRANCH_COMMITS+=("$hash")
+        CANDIDATES_AFTER_REVERTS+=("$hash")
     fi
 done
 
-# Source 2: All commits from an existing review branch (if it exists)
-REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
-REMOTE_BRANCH_COMMITS=()
-OLD_HEAD=$(git rev-parse "$REMOTE_REVIEW_BRANCH" 2>/dev/null)
-if [ -n "$OLD_HEAD" ]; then
-    echo "  - Found existing remote review branch. Preserving its commits."
-    MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
-    if [ -n "$MERGE_BASE" ]; then
-        REMOTE_BRANCH_COMMITS=(${(f)"$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")"})
-    fi
-else
-    echo "  - No existing remote review branch found."
-fi
-
-# Combine all potential commit hashes
-ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS[@]}")
-
-# De-duplicate commits based on their content (patch-id) to prevent re-picking the same change.
+# De-duplicate the remaining commits based on their content (patch-id).
 typeset -A patch_ids_to_hashes
-for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+for hash in "${CANDIDATES_AFTER_REVERTS[@]}"; do
     if [ -z "$hash" ]; then continue; fi
     patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
-    if [[ ! -v patch_ids_to_hashes[$patch_id] ]] || [[ " ${MAIN_BRANCH_COMMITS[@]} " =~ " ${hash} " ]]; then
+    # Prefer the original commit from the main branch if a content collision occurs.
+    is_from_main=false
+    for main_hash in "${MAIN_BRANCH_COMMITS[@]}"; do
+        if [[ "$main_hash" == "$hash" ]]; then
+            is_from_main=true
+            break
+        fi
+    done
+
+    if [[ ! -v patch_ids_to_hashes[$patch_id] ]] || $is_from_main; then
         patch_ids_to_hashes[$patch_id]=$hash
     fi
 done
 
 UNIQUE_HASHES=("${(@v)patch_ids_to_hashes}")
 if [ ${#UNIQUE_HASHES[@]} -eq 0 ]; then
-  echo "⚠️ No commits found for Ticket ID '$CANONICAL_TICKET_ID'."
-  exit 0
+  echo "⚠️ No commits found for Ticket ID '$CANONICAL_TICKET_ID' after filtering."
+  # If an old branch existed, we need to update it to be empty.
+  if [ -n "$OLD_HEAD" ]; then
+    echo "  - The feature appears to have been fully reverted. Updating review branch..."
+  else
+    exit 0
+  fi
 fi
 
 # Sort the unique commits chronologically.
@@ -227,17 +243,21 @@ COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
 # If an old branch existed, compare its content to what we've just calculated.
 if [ -n "$OLD_HEAD" ]; then
     typeset -A old_patch_ids
-    for hash in "${REMOTE_BRANCH_COMMITS[@]}"; do
+    for hash in "${REMOTE_BRANCH_COMMITS_RAW[@]}"; do
         if [ -z "$hash" ]; then continue; fi
         old_patch_ids[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
     done
+    
+    typeset -A new_patch_ids
+    for hash in "${COMMIT_ARRAY[@]}"; do
+        if [ -z "$hash" ]; then continue; fi
+        new_patch_ids[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
+    done
 
-    # If the number of unique patches is the same, and all old patches are present in the new set,
-    # then no content has changed.
     all_found=true
-    if [ ${#UNIQUE_HASHES[@]} -eq ${#old_patch_ids[@]} ]; then
+    if [ ${#new_patch_ids[@]} -eq ${#old_patch_ids[@]} ]; then
         for patch_id in ${(k)old_patch_ids}; do
-            if [[ ! -v patch_ids_to_hashes[$patch_id] ]]; then
+            if [[ ! -v new_patch_ids[$patch_id] ]]; then
                 all_found=false
                 break
             fi
@@ -257,9 +277,16 @@ echo "🔍 Found ${#COMMIT_ARRAY[@]} unique commits to be included in the review
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
 
 # 9. Determine the starting point for the new branch
-FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
-STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
-if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not determine parent of first commit."; exit 1; fi
+# Handle case where all commits were reverted
+if [ ${#COMMIT_ARRAY[@]} -eq 0 ]; then
+    # If no commits are left, we can't create a branch. We'll push an empty one later.
+    STARTING_POINT_HASH=$MAIN_BRANCH
+else
+    FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
+    STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
+fi
+
+if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not determine a starting point for the branch."; exit 1; fi
 echo "🌱 Creating review branch from starting point: $(git show -s --format='%h %s' "$STARTING_POINT_HASH")"
 
 # 10. Create or reset the review branch
@@ -271,16 +298,20 @@ git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to create new branch '$REVIEW_BRANCH_NAME'."; exit 1; fi
 
 # 11. Cherry-pick the commits
-echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
-for hash in "${COMMIT_ARRAY[@]}"; do
-  echo "  -> Picking $(git show -s --format='%h' "$hash")"
-  if ! git cherry-pick -x "$hash"; then
-    echo "❌ ERROR: Cherry-pick of $hash failed. Please resolve conflicts and re-run."
-    echo "To abort: 'git cherry-pick --abort' then 'git checkout $MAIN_BRANCH'."
-    exit 1
-  fi
-done
-echo "✅ All commits successfully cherry-picked."
+if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
+    echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
+    for hash in "${COMMIT_ARRAY[@]}"; do
+      echo "  -> Picking $(git show -s --format='%h' "$hash")"
+      if ! git cherry-pick -x "$hash"; then
+        echo "❌ ERROR: Cherry-pick of $hash failed. Please resolve conflicts and re-run."
+        echo "To abort: 'git cherry-pick --abort' then 'git checkout $MAIN_BRANCH'."
+        exit 1
+      fi
+    done
+    echo "✅ All commits successfully cherry-picked."
+else
+    echo "✅ No commits to cherry-pick. The branch will be empty of this feature's changes."
+fi
 
 # 12. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
@@ -335,7 +366,7 @@ else
         
         # Find newly added commits by comparing content (patch-id)
         typeset -A old_patch_ids_comment
-        for hash in "${REMOTE_BRANCH_COMMITS[@]}"; do
+        for hash in "${REMOTE_BRANCH_COMMITS_RAW[@]}"; do
             if [ -z "$hash" ]; then continue; fi
             old_patch_ids_comment[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
         done
@@ -374,7 +405,7 @@ This review branch has been updated."
 
 * [**View all file changes in this update**](https://github.com/$GITHUB_REPO/compare/$OLD_HEAD...$NEW_HEAD)
 
-No new commits were added, but the branch was rebuilt (e.g., to resolve conflicts or reorder commits)."
+No new commits were added, but the branch was rebuilt to reflect the latest changes (e.g., a revert)."
         fi
         
         gh pr comment "$EXISTING_PR_URL" --body "$COMMENT_BODY"
