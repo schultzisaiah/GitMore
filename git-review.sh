@@ -22,12 +22,15 @@
 #
 # EXAMPLES:
 # git-review "AB#1234"
-# git-review "AB#5678" develop
+# git-review "#5678"
+# git-review "ab5678" develop
 #
 
 # --- Configuration ---
 # The prefix for the review branches.
 REVIEW_BRANCH_PREFIX="CR"
+# The standard prefix for your tickets (e.g., "AB", "JIRA").
+TICKET_PREFIX="AB"
 
 
 # --- Script Logic ---
@@ -40,14 +43,35 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-TICKET_ID="$1"
-SANITIZED_TICKET_ID=$(echo "$TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
+# 2. Input Processing and Normalization
+echo "⚙️  Normalizing Ticket ID..."
+# Extract just the numbers from the input string.
+TICKET_NUMBER=$(echo "$1" | tr -dc '0-9')
+if [ -z "$TICKET_NUMBER" ]; then
+    echo "❌ Error: Could not find any numbers in the provided Ticket ID '$1'."
+    exit 1
+fi
+# Reconstruct the ticket ID into a canonical format.
+CANONICAL_TICKET_ID="${TICKET_PREFIX}#${TICKET_NUMBER}"
+# Create a sanitized version for the branch name.
+SANITIZED_TICKET_ID=$(echo "$CANONICAL_TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
 REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 
-echo "🚀 Starting review preparation for Ticket ID: $TICKET_ID"
+echo "🚀 Starting review preparation for Ticket ID: $CANONICAL_TICKET_ID"
 echo "🌿 Review branch will be: $REVIEW_BRANCH_NAME"
 
-# 2. Determine Main Branch
+# 3. Pre-flight Checks
+# Check for uncommitted changes in the workspace.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "❌ Error: Your workspace has uncommitted changes."
+  echo "Please commit, stash, or discard your changes before running this script."
+  exit 1
+fi
+# Check for gh dependency.
+if ! command -v gh &> /dev/null; then echo "❌ Error: GitHub CLI ('gh') is not installed."; exit 1; fi
+echo "✅ Workspace is clean. Dependencies are met."
+
+# 4. Determine Main Branch
 MAIN_BRANCH=""
 if [ -n "$2" ]; then
     MAIN_BRANCH="$2"
@@ -77,7 +101,7 @@ if [ -z "$MAIN_BRANCH" ]; then
     exit 1
 fi
 
-# 3. Auto-detect GitHub Repo
+# 5. Auto-detect GitHub Repo
 echo "🔎 Auto-detecting GitHub repository..."
 GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null)
 if [ -z "$GIT_REMOTE_URL" ]; then echo "❌ Error: Could not determine the remote 'origin' URL."; exit 1; fi
@@ -85,19 +109,17 @@ GITHUB_REPO=$(echo "$GIT_REMOTE_URL" | sed -e 's/.*github.com[\/:]//' -e 's/\.gi
 if [ -z "$GITHUB_REPO" ]; then echo "❌ Error: Could not parse GitHub repo from URL: $GIT_REMOTE_URL"; exit 1; fi
 echo "✅ Detected repository: $GITHUB_REPO"
 
-# 4. Dependency Check
-if ! command -v gh &> /dev/null; then echo "❌ Error: GitHub CLI ('gh') is not installed."; exit 1; fi
-
-# 5. Ensure local main branch is up-to-date
+# 6. Ensure local main branch is up-to-date
 echo "🔄 Pulling latest changes for '$MAIN_BRANCH'..."
 if ! git checkout "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
     echo "❌ Error: Could not check out or pull latest from '$MAIN_BRANCH'."; exit 1
 fi
 echo "✅ '$MAIN_BRANCH' is up-to-date."
 
-# 6. Find all commits related to the ticket from ALL sources
+# 7. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
-MAIN_BRANCH_COMMITS=$(git log "$MAIN_BRANCH" --grep="$TICKET_ID" --pretty=format:"%H")
+# Use the canonical ticket ID for the search, and the -i flag for case-insensitivity.
+MAIN_BRANCH_COMMITS=$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
 REMOTE_BRANCH_COMMITS=""
 if git show-ref --verify --quiet "refs/remotes/$REMOTE_REVIEW_BRANCH"; then
@@ -108,20 +130,20 @@ else
 fi
 COMMIT_HASHES=$( (echo "$MAIN_BRANCH_COMMITS"; echo "$REMOTE_BRANCH_COMMITS") | grep . | git rev-list --stdin --reverse --no-walk )
 if [ -z "$COMMIT_HASHES" ]; then
-  echo "⚠️ No commits found for Ticket ID '$TICKET_ID'."
+  echo "⚠️ No commits found for Ticket ID '$CANONICAL_TICKET_ID'."
   exit 0
 fi
 echo "🔍 Found the following unique commits to be cherry-picked:"
 COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
 
-# 7. Determine the starting point for the new branch
+# 8. Determine the starting point for the new branch
 FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
 STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
 if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not determine parent of first commit."; exit 1; fi
 echo "🌱 Creating review branch from starting point: $(git show -s --format='%h %s' "$STARTING_POINT_HASH")"
 
-# 8. Create or reset the review branch
+# 9. Create or reset the review branch
 if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
   echo "♻️ Deleting existing local branch '$REVIEW_BRANCH_NAME' to rebuild it."
   git branch -D "$REVIEW_BRANCH_NAME"
@@ -129,7 +151,7 @@ fi
 git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to create new branch '$REVIEW_BRANCH_NAME'."; exit 1; fi
 
-# 9. Cherry-pick the commits
+# 10. Cherry-pick the commits
 echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
 for hash in "${COMMIT_ARRAY[@]}"; do
   echo "  -> Picking $(git show -s --format='%h' "$hash")"
@@ -141,46 +163,41 @@ for hash in "${COMMIT_ARRAY[@]}"; do
 done
 echo "✅ All commits successfully cherry-picked."
 
-# 10. Push the branch to the remote
+# 11. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
 git push -f origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
 
-# 11. Find commit authors and map to GitHub users
+# 12. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
 ASSIGNEES=()
 for hash in "${COMMIT_ARRAY[@]}"; do
-    # For each commit, ask the API for the associated GitHub user login.
-    # This is more reliable than searching by email.
     login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty')
     if [ -n "$login" ]; then
         ASSIGNEES+=("$login")
     else
-        # This might happen if a commit was made with an email not linked to any GitHub account.
         echo "  - Could not find a linked GitHub user for commit $hash"
     fi
 done
-# Make the list of assignees unique
 UNIQUE_ASSIGNEES=("${(@u)ASSIGNEES}")
 ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 
-# 12. Create or update the Pull Request
+# 13. Create or update the Pull Request
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
 if [ -z "$EXISTING_PR_URL" ]; then
     echo "🤝 No existing PR found. Creating a new draft PR..."
-    PR_TITLE="[REVIEW-ONLY] Feature: $TICKET_ID"
+    PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
     PR_BODY=$(cat <<EOF
-This is an automatically generated, long-lived PR for reviewing all commits related to **$TICKET_ID**. This PR should **NEVER** be merged.
+This is an automatically generated, long-lived PR for reviewing all commits related to **$CANONICAL_TICKET_ID**. This PR should **NEVER** be merged.
 
 ---
 *Want to use this script for your own reviews? [Install \`git-review\` from this gist](https://gist.github.com/schultzisaiah/f25734903c466454c4f385032d3eba47).*
 EOF
 )
     
-    # Build the create command with assignees if any were found
     CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
     if [ -n "$ASSIGNEE_STRING" ]; then
         echo "  - Assigning users: $ASSIGNEE_STRING"
@@ -191,7 +208,6 @@ EOF
     if [ $? -eq 0 ]; then echo "🎉 Success! New draft PR created at: $NEW_PR_URL"; else echo "❌ Error: Failed to create Pull Request."; fi
 else
     echo "✅ Existing PR has been updated with the latest changes."
-    # If we have assignees, check who needs to be added
     if [ -n "$ASSIGNEE_STRING" ]; then
         CURRENT_ASSIGNEES=($(gh pr view "$EXISTING_PR_URL" --json assignees --jq '.assignees.[].login'))
         ASSIGNEES_TO_ADD=()
