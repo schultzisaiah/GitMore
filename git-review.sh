@@ -161,8 +161,29 @@ echo "✅ '$MAIN_BRANCH' is up-to-date."
 
 # 8. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
-# Source 1: Tagged commits from the main branch
-MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
+# Source 1: Tagged commits from the main branch, with revert handling.
+ALL_TAGGED_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
+typeset -A commits_to_exclude
+echo "  - Analyzing for reverted commits..."
+for hash in "${ALL_TAGGED_COMMITS[@]}"; do
+    commit_msg=$(git show -s --format=%s "$hash")
+    if [[ "$commit_msg" == "Revert "* ]]; then
+        commits_to_exclude[$hash]=1
+        # Find the hash of the commit this one reverts from the commit body.
+        reverted_hash=$(git show -s --format=%b "$hash" | grep 'This reverts commit' | sed 's/.*This reverts commit \([0-9a-f]\{40\}\)\..*/\1/')
+        if [ -n "$reverted_hash" ]; then
+            commits_to_exclude[$reverted_hash]=1
+            echo "    - Found revert $hash, excluding it and original commit ${reverted_hash:0:7}"
+        fi
+    fi
+done
+
+MAIN_BRANCH_COMMITS=()
+for hash in "${ALL_TAGGED_COMMITS[@]}"; do
+    if [[ ! -v commits_to_exclude[$hash] ]]; then
+        MAIN_BRANCH_COMMITS+=("$hash")
+    fi
+done
 
 # Source 2: All commits from an existing review branch (if it exists)
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
