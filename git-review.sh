@@ -86,7 +86,6 @@ if [ -z "$TICKET_NUMBER" ]; then
 fi
 CANONICAL_TICKET_ID="${TICKET_PREFIX}${TICKET_NUMBER}"
 SANITIZED_TICKET_ID=$(echo "$CANONICAL_TICKET_ID" | sed 's/[^a-zA-Z0-9]/-/g')
-echo "⚙️  Normalized Ticket ID: $SANITIZED_TICKET_ID"
 REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 
 echo "🚀 Starting review preparation for Ticket ID: $CANONICAL_TICKET_ID"
