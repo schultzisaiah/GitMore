@@ -157,7 +157,13 @@ REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
 REMOTE_BRANCH_COMMITS=""
 if git show-ref --verify --quiet "refs/remotes/$REMOTE_REVIEW_BRANCH"; then
     echo "  - Found existing remote review branch. Preserving its commits."
-    REMOTE_BRANCH_COMMITS=$(git log "$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")
+    # Find the common ancestor between main and the review branch.
+    MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
+    # Get all commits on the review branch since that common ancestor.
+    # This correctly isolates all cherry-picked commits, tagged or not.
+    if [ -n "$MERGE_BASE" ]; then
+        REMOTE_BRANCH_COMMITS=$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")
+    fi
 else
     echo "  - No existing remote review branch found."
 fi
