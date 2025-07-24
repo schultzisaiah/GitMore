@@ -13,7 +13,7 @@
 # - GitHub CLI (gh). Install from: https://cli.github.com/
 #
 # SETUP:
-# 1. Save this script as 'git-review' (no file extension) in a directory on your PATH.
+# 1. Save this script as 'git-review' in a directory on your PATH.
 # 2. Make it executable: `chmod +x git-review`
 # 3. Run `gh auth login` once to authenticate the GitHub CLI.
 #
@@ -53,20 +53,30 @@ if [ -n "$2" ]; then
     MAIN_BRANCH="$2"
     echo "➡️ Using specified main branch: $MAIN_BRANCH"
 else
-    echo "🔎 Auto-detecting main branch (checking for 'main' or 'master')..."
+    echo "🔎 Auto-detecting default branch from remote 'origin'..."
     # Fetch first to ensure remote refs are up-to-date for detection
     git fetch origin
-    if git show-ref --verify --quiet refs/remotes/origin/main; then
-        MAIN_BRANCH="main"
-        echo "✅ Detected 'main' as the primary branch."
-    elif git show-ref --verify --quiet refs/remotes/origin/master; then
-        MAIN_BRANCH="master"
-        echo "✅ Detected 'master' as the primary branch."
+    # This is the most reliable way to find the default branch by checking the remote's HEAD.
+    DETECTED_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+
+    if [ -n "$DETECTED_BRANCH" ] && [ "$DETECTED_BRANCH" != "(unknown)" ]; then
+        MAIN_BRANCH="$DETECTED_BRANCH"
+        echo "✅ Detected '$MAIN_BRANCH' as the default remote branch."
+    else
+        # Fallback for older git versions or unusual remote configurations
+        echo "⚠️ Could not detect default branch from remote HEAD. Falling back to checking for 'main' or 'master'."
+        if git show-ref --verify --quiet refs/remotes/origin/main; then
+            MAIN_BRANCH="main"
+            echo "✅ Detected 'main' as the primary branch."
+        elif git show-ref --verify --quiet refs/remotes/origin/master; then
+            MAIN_BRANCH="master"
+            echo "✅ Detected 'master' as the primary branch."
+        fi
     fi
 fi
 
 if [ -z "$MAIN_BRANCH" ]; then
-    echo "❌ Error: Could not auto-detect 'main' or 'master' branch from remote 'origin'."
+    echo "❌ Error: Could not auto-detect the default branch."
     echo "Please specify your main branch name as the second argument."
     echo "Usage: $0 \"<TicketID>\" <main-branch-name>"
     exit 1
