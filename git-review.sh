@@ -8,7 +8,7 @@
 # ticket ID. It intelligently combines commits from main and the remote review
 # branch, and then creates/updates a PR, auto-assigning commit authors.
 #
-# It also includes a self-updating mechanism.
+# It also includes a self-updating mechanism and posts update comments to PRs.
 #
 # DEPENDENCIES:
 # - git
@@ -167,7 +167,8 @@ MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID
 # Source 2: All commits from an existing review branch (if it exists)
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
 REMOTE_BRANCH_COMMITS=()
-if git show-ref --verify --quiet "refs/remotes/$REMOTE_REVIEW_BRANCH"; then
+OLD_HEAD=$(git rev-parse "$REMOTE_REVIEW_BRANCH" 2>/dev/null)
+if [ -n "$OLD_HEAD" ]; then
     echo "  - Found existing remote review branch. Preserving its commits."
     MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
     if [ -n "$MERGE_BASE" ]; then
@@ -184,18 +185,13 @@ ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS[@]}")
 typeset -A patch_ids_to_hashes
 for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
     if [ -z "$hash" ]; then continue; fi
-    # Calculate the patch-id for the commit's diff.
     patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
-    # Store the hash, keyed by its patch-id. This automatically de-duplicates based on content.
-    # We prefer the original commit from the main branch if a content collision occurs.
     if [[ ! -v patch_ids_to_hashes[$patch_id] ]] || [[ " ${MAIN_BRANCH_COMMITS[@]} " =~ " ${hash} " ]]; then
         patch_ids_to_hashes[$patch_id]=$hash
     fi
 done
 
-# Get the final list of unique commit hashes from the associative array values.
 UNIQUE_HASHES=("${(@v)patch_ids_to_hashes}")
-
 if [ ${#UNIQUE_HASHES[@]} -eq 0 ]; then
   echo "⚠️ No commits found for Ticket ID '$CANONICAL_TICKET_ID'."
   exit 0
@@ -204,6 +200,36 @@ fi
 # Sort the unique commits chronologically.
 COMMIT_HASHES=$(echo "${UNIQUE_HASHES[@]}" | tr ' ' '\n' | git rev-list --stdin --reverse --no-walk)
 COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
+
+# --- "No Changes" Check ---
+# If an old branch existed, compare its content to what we've just calculated.
+if [ -n "$OLD_HEAD" ]; then
+    typeset -A old_patch_ids
+    for hash in "${REMOTE_BRANCH_COMMITS[@]}"; do
+        if [ -z "$hash" ]; then continue; fi
+        old_patch_ids[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
+    done
+
+    # If the number of unique patches is the same, and all old patches are present in the new set,
+    # then no content has changed.
+    all_found=true
+    if [ ${#UNIQUE_HASHES[@]} -eq ${#old_patch_ids[@]} ]; then
+        for patch_id in ${(k)old_patch_ids}; do
+            if [[ ! -v patch_ids_to_hashes[$patch_id] ]]; then
+                all_found=false
+                break
+            fi
+        done
+    else
+        all_found=false
+    fi
+
+    if $all_found; then
+        echo "✅ No content changes detected in the review branch. Nothing to do."
+        git checkout "$MAIN_BRANCH" > /dev/null 2>&1
+        exit 0
+    fi
+fi
 
 echo "🔍 Found ${#COMMIT_ARRAY[@]} unique commits to be included in the review:"
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
@@ -239,6 +265,7 @@ echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
 git push -f origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
+NEW_HEAD=$(git rev-parse "$REVIEW_BRANCH_NAME")
 
 # 13. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
@@ -279,6 +306,43 @@ EOF
     if [ $? -eq 0 ]; then echo "🎉 Success! New draft PR created at: $NEW_PR_URL"; else echo "❌ Error: Failed to create Pull Request."; fi
 else
     echo "✅ Existing PR has been updated with the latest changes."
+    
+    # Post an update comment to the PR
+    if [ -n "$OLD_HEAD" ]; then
+        echo "📝 Posting an update comment to the PR..."
+        
+        # Find newly added commits by comparing content (patch-id)
+        typeset -A old_patch_ids_comment
+        for hash in "${REMOTE_BRANCH_COMMITS[@]}"; do
+            if [ -z "$hash" ]; then continue; fi
+            old_patch_ids_comment[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
+        done
+
+        NEWLY_ADDED_COMMITS=()
+        for hash in "${COMMIT_ARRAY[@]}"; do
+            patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
+            if [[ ! -v old_patch_ids_comment[$patch_id] ]]; then
+                NEWLY_ADDED_COMMITS+=("$hash")
+            fi
+        done
+
+        COMMENT_BODY="**🤖 Review Update**\n\nThis review branch has been updated.\n\n"
+        COMMENT_BODY+="* [**View visual changes since last update**](https://github.com/$GITHUB_REPO/compare/$OLD_HEAD...$NEW_HEAD)\n\n"
+
+        if [ ${#NEWLY_ADDED_COMMITS[@]} -gt 0 ]; then
+            COMMENT_BODY+="**New commits added in this update:**\n"
+            for hash in "${NEWLY_ADDED_COMMITS[@]}"; do
+                commit_line=$(git show -s --format='* `%h` %s' "$hash")
+                COMMENT_BODY+="$commit_line\n"
+            done
+        else
+            COMMENT_BODY+="No new commits were added, but the branch was rebuilt (e.g., to resolve conflicts or reorder commits)."
+        fi
+        
+        gh pr comment "$EXISTING_PR_URL" --body "$COMMENT_BODY"
+    fi
+    
+    # Update assignees
     if [ -n "$ASSIGNEE_STRING" ]; then
         CURRENT_ASSIGNEES=($(gh pr view "$EXISTING_PR_URL" --json assignees --jq '.assignees.[].login'))
         ASSIGNEES_TO_ADD=()
