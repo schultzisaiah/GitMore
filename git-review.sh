@@ -41,14 +41,12 @@ SCRIPT_URL="https://gist.githubusercontent.com/schultzisaiah/f25734903c466454c4f
 # --- Self-Update Function ---
 checkForUpdates() {
     # Get the absolute path of the currently running script using a zsh-native method.
-    # This is more reliable than $0 when the script is in the PATH.
     local script_path="${(%):-%x}"
     # Create a temporary file to download the latest version.
     local temp_file=$(mktemp)
 
     # Download the latest version of the script with a 3-second timeout.
     if ! curl -sSL --max-time 3 "$SCRIPT_URL" -o "$temp_file"; then
-        # If download fails or times out, just continue with the current version.
         echo "⚠️  Warning: Could not check for script updates. Continuing..."
         rm "$temp_file"
         return
@@ -58,15 +56,12 @@ checkForUpdates() {
     if ! diff -q "$script_path" "$temp_file" >/dev/null; then
         echo "✨ A new version of this script is available."
         echo "   Updating now..."
-        # Replace the old script with the new one.
         mv "$temp_file" "$script_path"
-        # Ensure the new script is executable.
         chmod +x "$script_path"
         echo "✅ Script updated successfully. Please re-run your command."
         exit 0
     fi
 
-    # No updates, clean up the temporary file.
     rm "$temp_file"
 }
 
@@ -153,28 +148,51 @@ echo "✅ '$MAIN_BRANCH' is up-to-date."
 
 # 8. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
-MAIN_BRANCH_COMMITS=$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")
+# Source 1: Tagged commits from the main branch
+MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
+
+# Source 2: All commits from an existing review branch (if it exists)
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
-REMOTE_BRANCH_COMMITS=""
+REMOTE_BRANCH_COMMITS=()
 if git show-ref --verify --quiet "refs/remotes/$REMOTE_REVIEW_BRANCH"; then
     echo "  - Found existing remote review branch. Preserving its commits."
-    # Find the common ancestor between main and the review branch.
     MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
-    # Get all commits on the review branch since that common ancestor.
-    # This correctly isolates all cherry-picked commits, tagged or not.
     if [ -n "$MERGE_BASE" ]; then
-        REMOTE_BRANCH_COMMITS=$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")
+        REMOTE_BRANCH_COMMITS=(${(f)"$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")"})
     fi
 else
     echo "  - No existing remote review branch found."
 fi
-COMMIT_HASHES=$( (echo "$MAIN_BRANCH_COMMITS"; echo "$REMOTE_BRANCH_COMMITS") | grep . | git rev-list --stdin --reverse --no-walk )
-if [ -z "$COMMIT_HASHES" ]; then
+
+# Combine all potential commit hashes
+ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS[@]}")
+
+# De-duplicate commits based on their content (patch-id) to prevent re-picking the same change.
+typeset -A patch_ids_to_hashes
+for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+    if [ -z "$hash" ]; then continue; fi
+    # Calculate the patch-id for the commit's diff.
+    patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
+    # Store the hash, keyed by its patch-id. This automatically de-duplicates based on content.
+    # We prefer the original commit from the main branch if a content collision occurs.
+    if [[ ! -v patch_ids_to_hashes[$patch_id] ]] || [[ " ${MAIN_BRANCH_COMMITS[@]} " =~ " ${hash} " ]]; then
+        patch_ids_to_hashes[$patch_id]=$hash
+    fi
+done
+
+# Get the final list of unique commit hashes from the associative array values.
+UNIQUE_HASHES=("${(@v)patch_ids_to_hashes}")
+
+if [ ${#UNIQUE_HASHES[@]} -eq 0 ]; then
   echo "⚠️ No commits found for Ticket ID '$CANONICAL_TICKET_ID'."
   exit 0
 fi
-echo "🔍 Found the following unique commits to be cherry-picked:"
+
+# Sort the unique commits chronologically.
+COMMIT_HASHES=$(echo "${UNIQUE_HASHES[@]}" | tr ' ' '\n' | git rev-list --stdin --reverse --no-walk)
 COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
+
+echo "🔍 Found ${#COMMIT_ARRAY[@]} unique commits to be included in the review:"
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
 
 # 9. Determine the starting point for the new branch
