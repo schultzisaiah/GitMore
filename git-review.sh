@@ -149,16 +149,16 @@ echo "✅ Branch pushed successfully."
 
 # 11. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
-AUTHOR_EMAILS=$(git log "$STARTING_POINT_HASH..$REVIEW_BRANCH_NAME" --pretty=format:'%ae' | sort -u)
 ASSIGNEES=()
-for email in ${(f)AUTHOR_EMAILS}; do
-    # Search for a user with the given email. The jq part extracts the login or returns nothing.
-    login=$(gh api "search/users?q=${email}+in:email" --jq '.items[0].login // empty')
+for hash in "${COMMIT_ARRAY[@]}"; do
+    # For each commit, ask the API for the associated GitHub user login.
+    # This is more reliable than searching by email.
+    login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty')
     if [ -n "$login" ]; then
-        echo "  - Found GitHub user '$login' for email '$email'"
         ASSIGNEES+=("$login")
     else
-        echo "  - Could not find a public GitHub user for email '$email'"
+        # This might happen if a commit was made with an email not linked to any GitHub account.
+        echo "  - Could not find a linked GitHub user for commit $hash"
     fi
 done
 # Make the list of assignees unique
