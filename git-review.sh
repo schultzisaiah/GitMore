@@ -182,9 +182,32 @@ fi
 # Combine all potential commit hashes into a single pool
 ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS_RAW[@]}")
 
+# Analyze the entire pool for reverted commits to ensure the final state is accurate.
+typeset -A commits_to_exclude
+echo "  - Analyzing for reverted commits..."
+for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+    if [ -z "$hash" ]; then continue; fi
+    commit_msg=$(git show -s --format=%s "$hash")
+    if [[ "$commit_msg" == "Revert "* ]]; then
+        commits_to_exclude[$hash]=1
+        reverted_hash=$(git show -s --format=%b "$hash" | grep 'This reverts commit' | sed 's/.*This reverts commit \([0-9a-f]\{40\}\)\..*/\1/')
+        if [ -n "$reverted_hash" ]; then
+            commits_to_exclude[$reverted_hash]=1
+            echo "    - Found revert $hash, excluding it and original commit ${reverted_hash:0:7}"
+        fi
+    fi
+done
+
+CANDIDATES_AFTER_REVERTS=()
+for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+    if [[ ! -v commits_to_exclude[$hash] ]]; then
+        CANDIDATES_AFTER_REVERTS+=("$hash")
+    fi
+done
+
 # De-duplicate the remaining commits based on their content (patch-id).
 typeset -A patch_ids_to_hashes
-for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
+for hash in "${CANDIDATES_AFTER_REVERTS[@]}"; do
     if [ -z "$hash" ]; then continue; fi
     patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
     # Prefer the original commit from the main branch if a content collision occurs.
