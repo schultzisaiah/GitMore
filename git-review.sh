@@ -98,10 +98,20 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "Please commit, stash, or discard your changes before running this script."
   exit 1
 fi
-# Check for all required dependencies.
-if ! command -v git &> /dev/null; then echo "❌ Error: Git ('git') is not installed. Please install it to continue."; exit 1; fi
-if ! command -v curl &> /dev/null; then echo "❌ Error: Curl ('curl') is not installed. Please install it to continue."; exit 1; fi
-if ! command -v gh &> /dev/null; then echo "❌ Error: GitHub CLI ('gh') is not installed. Please install it from https://cli.github.com/"; exit 1; fi
+# Check for all required dependencies at once.
+local missing_deps=()
+if ! command -v git &> /dev/null; then missing_deps+=("git"); fi
+if ! command -v curl &> /dev/null; then missing_deps+=("curl"); fi
+if ! command -v gh &> /dev/null; then missing_deps+=("GitHub CLI ('gh')"); fi
+
+if [ ${#missing_deps[@]} -gt 0 ]; then
+    echo "❌ Error: The following required dependencies are not installed:"
+    for dep in "${missing_deps[@]}"; do
+        echo "  - $dep"
+    done
+    echo "Please install them to continue. The GitHub CLI can be found at https://cli.github.com/"
+    exit 1
+fi
 echo "✅ Workspace is clean. Dependencies are met."
 
 # 5. Determine Main Branch
