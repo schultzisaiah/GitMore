@@ -289,14 +289,26 @@ else
     echo "✅ No commits to cherry-pick. The branch will be empty of this feature's changes."
 fi
 
-# 12. Push the branch to the remote
+# 12. Map original commit hashes to their new cherry-picked hashes
+typeset -A original_to_new_hash_map
+if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
+    echo "🗺️  Mapping new commit hashes to original hashes..."
+    # Get the list of newly created hashes on this branch, in chronological order.
+    NEW_HASHES_ON_BRANCH=(${(f)"$(git log "$STARTING_POINT_HASH..HEAD" --reverse --pretty=format:"%H")"})
+    # Create a map from original hash to the new cherry-picked hash.
+    for i in {1..${#COMMIT_ARRAY[@]}}; do
+        original_to_new_hash_map[${COMMIT_ARRAY[i]}]=${NEW_HASHES_ON_BRANCH[i]}
+    done
+fi
+
+# 13. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
 git push -f origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
 NEW_HEAD=$(git rev-parse "$REVIEW_BRANCH_NAME")
 
-# 13. Find commit authors and map to GitHub users
+# 14. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
 ASSIGNEES=()
 for hash in "${COMMIT_ARRAY[@]}"; do
@@ -310,7 +322,7 @@ done
 UNIQUE_ASSIGNEES=("${(@u)ASSIGNEES}")
 ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 
-# 14. Create or update the Pull Request
+# 15. Create or update the Pull Request
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
@@ -339,14 +351,14 @@ if [ -z "$EXISTING_PR_URL" ]; then
 |---|---|---|
 "
         for hash in "${COMMIT_ARRAY[@]}"; do
-            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+            commit_info=$(git show -s --format='%ci|%h|%s' "$hash")
             commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
             commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
-            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
-            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
-            # Use the canonical commit link since the PR doesn't exist yet.
-            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${commit_hash_full})"
+            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
+            commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
+            new_hash_for_link=${original_to_new_hash_map[$hash]}
+            # Use the canonical commit link since the PR doesn't exist yet, but with the NEW hash.
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${new_hash_for_link})"
             COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
 "
         done
@@ -378,14 +390,14 @@ else
 |---|---|---|
 "
         for hash in "${COMMIT_ARRAY[@]}"; do
-            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+            commit_info=$(git show -s --format='%ci|%h|%s' "$hash")
             commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
             commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
-            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
-            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
-            # Use the PR-specific commit link now that we have the PR number.
-            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${commit_hash_full})"
+            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
+            commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
+            new_hash_for_link=${original_to_new_hash_map[$hash]}
+            # Use the PR-specific commit link now that we have the PR number, with the NEW hash.
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${new_hash_for_link})"
             COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
 "
         done
