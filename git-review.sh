@@ -246,8 +246,7 @@ if [ -n "$OLD_HEAD" ]; then
 
     if $all_found; then
         echo "✅ No content changes detected in the review branch. Nothing to do."
-        git checkout "$MAIN_BRANCH" > /dev/null 2>&1
-        exit 0
+        # Even if no code changes, we'll still run the cross-linking logic to ensure all PRs are in sync.
     fi
 fi
 
@@ -442,37 +441,38 @@ if [ -n "$EXISTING_PR_URL" ]; then
     # Search for open PRs in the org that contain the ticket ID.
     RELATED_PRS=(${(f)"$(gh search prs --owner "$GITHUB_ORG" "$CANONICAL_TICKET_ID" --state open --json url --jq '.[] | .url')"})
     
-    if [ ${#RELATED_PRS[@]} -gt 1 ]; then
-        echo "  - Found ${#RELATED_PRS[@]} related PRs. Updating them with links..."
-        
-        RELATED_PRS_BODY="
+    RELATED_REVIEWS_MARKER="
 
 ---
 
-### Related Reviews
+### Related Reviews"
+    
+    RELATED_PRS_BODY=""
+    if [ ${#RELATED_PRS[@]} -gt 1 ]; then
+        echo "  - Found ${#RELATED_PRS[@]} related PRs. Updating them with links..."
+        
+        RELATED_PRS_BODY+="${RELATED_REVIEWS_MARKER}
 "
         for pr_url in "${RELATED_PRS[@]}"; do
             RELATED_PRS_BODY+="* $pr_url
 "
         done
-
-        # Loop through each found PR and update its body
-        for pr_url in "${RELATED_PRS[@]}"; do
-            echo "    - Updating $pr_url"
-            # Get the current body of the target PR
-            target_pr_body=$(gh pr view "$pr_url" --json body --jq '.body')
-            
-            # Remove any previous "Related Reviews" section to prevent duplicates
-            clean_body=$(echo "$target_pr_body" | sed -n '/---/,/### Related Reviews/!p')
-
-            # Append the new list
-            new_body="${clean_body}${RELATED_PRS_BODY}"
-            
-            gh pr edit "$pr_url" --body "$new_body"
-        done
-    else
-        echo "  - No other related PRs found."
     fi
+
+    # Loop through each found PR and update its body
+    for pr_url in "${RELATED_PRS[@]}"; do
+        echo "    - Updating $pr_url"
+        # Get the current body of the target PR
+        target_pr_body=$(gh pr view "$pr_url" --json body --jq '.body')
+        
+        # Remove any previous "Related Reviews" section using string manipulation
+        base_body=${target_pr_body%%$RELATED_REVIEWS_MARKER*}
+
+        # Append the new list (which will be empty if there's only one PR)
+        new_body="${base_body}${RELATED_PRS_BODY}"
+        
+        gh pr edit "$pr_url" --body "$new_body"
+    done
 fi
 
 
