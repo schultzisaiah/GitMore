@@ -477,6 +477,6 @@ fi
 
 
 # Go back to the main branch for safety.
-echo "↩️ Returning to '$MAIN_BRANCH' branch."
+echo "↩️  Returning to '$MAIN_BRANCH' branch."
 git checkout "$MAIN_BRANCH" > /dev/null 2>&1
 
