@@ -37,7 +37,7 @@ REVIEW_BRANCH_PREFIX="CR"
 # Example: "AB#", "JIRA-", "TICKET-"
 TICKET_PREFIX="AB#"
 # The URL to the raw script content for self-updating.
-SCRIPT_URL="https://gist.githubusercontent.com/schultzisaiah/f25734903c466454c4f385032d3eba47/raw"
+SCRIPT_URL="https://raw.githubusercontent.com/schultzisaiah/GitMore/refs/heads/main/scripts/git-review.sh"
 
 # --- Self-Update Function ---
 checkForUpdates() {
