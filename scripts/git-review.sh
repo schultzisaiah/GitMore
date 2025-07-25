@@ -17,7 +17,7 @@
 # - curl
 #
 # SETUP:
-# 1. Save this script as 'git-review' in a directory on your PATH.
+# 1. Save this script as 'git-review' (no file extension) in a directory on your PATH.
 # 2. Make it executable: `chmod +x git-review`
 # 3. Run `gh auth login` once to authenticate the GitHub CLI.
 #
