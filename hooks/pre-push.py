@@ -8,7 +8,8 @@
 # current ADO iteration, and then tags the work items and sets their
 # 'Fixed in Iteration' field.
 #
-# It also includes optional test execution and various user-friendly checks
+# It automatically detects your repository's default branch (main/master) and
+# includes optional test execution and various user-friendly checks
 # to ensure dependencies and configurations are met.
 #
 # DEPENDENCIES:
@@ -29,8 +30,8 @@
 #    a) Set it in your shell config (e.g., ~/.zshrc or ~/.bash_profile):
 #       export ADO_TOKEN="your_token_here"
 #    b) OR export it in your current terminal session.
-# 6. Edit the Configuration variables in the section below to match your
-#    repository's settings (e.g., REPO_MAIN_BRANCH, TAG_VALUE).
+# 6. Edit the `TAG_VALUE` variable in the Configuration section below to match
+#    your repository's settings.
 #
 
 import re
@@ -55,8 +56,6 @@ with contextlib.redirect_stderr(io.StringIO()):
 
 
 # --- Configuration ---
-# The main or master branch of your repository
-REPO_MAIN_BRANCH = "TODO"
 # The tag to add to the ADO work item
 TAG_VALUE = "App:TODO"
 # Your Azure DevOps organization and project details
@@ -105,6 +104,31 @@ def print_status(icon, message, is_warning=False, is_error=False):
     print(f"⚠️  WARN: {message}", file=sys.stdout)
   else:
     print(f"{icon} {message}", file=sys.stdout)
+
+
+def get_default_branch():
+  """
+  Determines the default branch (e.g., main, master) from the 'origin' remote.
+  """
+  print_status("🔎", "Auto-detecting default branch from remote 'origin'...")
+  try:
+    # This command is robust for finding the default branch name
+    remote_info = check_output(['git', 'remote', 'show', 'origin']).decode('utf-8')
+    match = re.search(r'HEAD branch:\s*(\S+)', remote_info)
+    if match:
+      branch_name = match.group(1)
+      print_status("✅", f"Detected '{branch_name}' as the default remote branch.")
+      return branch_name
+    else:
+      print_status("❌", "Could not determine default branch from 'git remote show origin'.", is_error=True)
+      print_status("ℹ️", "Please ensure your 'origin' remote is configured correctly.")
+      return None
+  except CalledProcessError:
+    print_status("❌", "Failed to run 'git remote show origin'. Is this a git repository with a remote named 'origin'?", is_error=True)
+    return None
+  except FileNotFoundError:
+    print_status("❌", "The 'git' command was not found. Is git installed and in your PATH?", is_error=True)
+    return None
 
 
 def run_gradle_tests():
@@ -248,7 +272,7 @@ def parse_commit_message(commit_messages):
   return list(ticket_numbers)
 
 
-def process_commits(local_ref, local_sha, remote_sha):
+def process_commits(local_ref, local_sha, remote_sha, default_branch):
   """
   Processes commits in a given range to extract ticket numbers and add tags.
   """
@@ -264,7 +288,7 @@ def process_commits(local_ref, local_sha, remote_sha):
     # If remote_sha is all zeros, it's a new branch
     if remote_sha == "0000000000000000000000000000000000000000":
       print_status("✨", "New branch detected.")
-      base_sha = check_output(['git', 'merge-base', local_sha, f"origin/{REPO_MAIN_BRANCH}"]).decode('utf-8').strip()
+      base_sha = check_output(['git', 'merge-base', local_sha, f"origin/{default_branch}"]).decode('utf-8').strip()
       commit_range = f"{base_sha}..{local_sha}"
     else:
       commit_range = f"{remote_sha}..{local_sha}"
@@ -302,6 +326,10 @@ def main():
   """
   print_status("🚀", "--- Starting Pre-Push Hook ---")
 
+  default_branch = get_default_branch()
+  if not default_branch:
+    sys.exit(1) # Exit if we can't determine the default branch
+
   # --- Configuration Check ---
   print_status("🔧", "Checking configuration...")
   is_setup_complete = True
@@ -335,7 +363,7 @@ def main():
       continue
 
     local_ref, local_sha, remote_ref, remote_sha = line.split()
-    process_commits(local_ref, local_sha, remote_sha)
+    process_commits(local_ref, local_sha, remote_ref, remote_sha, default_branch)
 
   print_status("🏁", "--- Pre-Push Hook Finished ---")
 
