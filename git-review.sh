@@ -8,7 +8,7 @@
 # ticket ID. It intelligently combines commits from main and the remote review
 # branch, and then creates/updates a PR, auto-assigning commit authors.
 #
-# It also includes a self-updating mechanism and posts update comments to PRs.
+# It also includes a self-updating mechanism and updates the PR body on changes.
 #
 # DEPENDENCIES:
 # - git
@@ -314,18 +314,45 @@ ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
-if [ -z "$EXISTING_PR_URL" ]; then
-    echo "🤝 No existing PR found. Creating a new draft PR..."
-    PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
-    PR_BODY=$(cat <<EOF
+# --- Construct the new PR Body ---
+PR_BODY_HEADER=$(cat <<EOF
 This is an automatically generated, long-lived PR for reviewing all commits related to **$CANONICAL_TICKET_ID**. This PR should **NEVER** be merged.
 
 ---
 *Want to use this script for your own reviews? [Install \`git-review\` from this gist](https://gist.github.com/schultzisaiah/f25734903c466454c4f385032d3eba47).*
 EOF
 )
+
+COMMIT_LIST_BODY=""
+if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
+    COMMIT_LIST_BODY+="
+
+---
+
+### Commits Included in this Review
+
+| Date | Commit | Description |
+|---|---|---|
+"
+    for hash in "${COMMIT_ARRAY[@]}"; do
+        commit_info=$(git show -s --format='%ci|`%h`|%s' "$hash")
+        commit_date=$(echo "$commit_info" | cut -d'|' -f1 | cut -d' ' -f1)
+        commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
+        commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
+        COMMIT_LIST_BODY+="${commit_date}|${commit_hash_short}|${commit_subject}
+"
+    done
+fi
+
+FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
+# --- End of PR Body Construction ---
+
+
+if [ -z "$EXISTING_PR_URL" ]; then
+    echo "🤝 No existing PR found. Creating a new draft PR..."
+    PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
     
-    CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
+    CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$FINAL_PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
     if [ -n "$ASSIGNEE_STRING" ]; then
         echo "  - Assigning users: $ASSIGNEE_STRING"
         CREATE_ARGS+=("--assignee" "$ASSIGNEE_STRING")
@@ -336,56 +363,8 @@ EOF
 else
     echo "✅ Existing PR has been updated with the latest changes."
     
-    # Post an update comment to the PR
-    if [ -n "$OLD_HEAD" ]; then
-        echo "📝 Posting an update comment to the PR..."
-        
-        # Find newly added commits by comparing content (patch-id)
-        typeset -A old_patch_ids_comment
-        for hash in "${REMOTE_BRANCH_COMMITS_RAW[@]}"; do
-            if [ -z "$hash" ]; then continue; fi
-            old_patch_ids_comment[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
-        done
-
-        NEWLY_ADDED_COMMITS=()
-        for hash in "${COMMIT_ARRAY[@]}"; do
-            patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
-            if [[ ! -v old_patch_ids_comment[$patch_id] ]]; then
-                NEWLY_ADDED_COMMITS+=("$hash")
-            fi
-        done
-
-        # Construct the comment body with real newlines
-        COMMENT_BODY="**🤖 Review Update**
-
-This review branch has been updated."
-
-        if [ ${#NEWLY_ADDED_COMMITS[@]} -gt 0 ]; then
-            PR_NUMBER=$(gh pr view "$EXISTING_PR_URL" --json number --jq '.number')
-            first_new_commit=${NEWLY_ADDED_COMMITS[1]}
-            last_new_commit=${NEWLY_ADDED_COMMITS[-1]}
-
-            COMMENT_BODY+="
-
-* [**View changes for new commits in this update**](https://github.com/$GITHUB_REPO/pull/$PR_NUMBER/files/$first_new_commit^..$last_new_commit)
-
-**New commits added:**
-"
-            for hash in "${NEWLY_ADDED_COMMITS[@]}"; do
-                commit_line=$(git show -s --format='* `%h` %s' "$hash")
-                COMMENT_BODY+="${commit_line}
-"
-            done
-        else
-            COMMENT_BODY+="
-
-* [**View all file changes in this update**](https://github.com/$GITHUB_REPO/compare/$OLD_HEAD...$NEW_HEAD)
-
-No new commits were added, but the branch was rebuilt to reflect the latest changes (e.g., a revert)."
-        fi
-        
-        gh pr comment "$EXISTING_PR_URL" --body "$COMMENT_BODY"
-    fi
+    echo "📝 Updating the PR body with the latest commit list..."
+    gh pr edit "$EXISTING_PR_URL" --body "$FINAL_PR_BODY"
     
     # Update assignees
     if [ -n "$ASSIGNEE_STRING" ]; then
