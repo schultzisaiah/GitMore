@@ -314,7 +314,6 @@ ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
-# --- Construct the new PR Body ---
 PR_BODY_HEADER=$(cat <<EOF
 This is an automatically generated, long-lived PR for reviewing all commits related to **$CANONICAL_TICKET_ID**. This PR should **NEVER** be merged.
 
@@ -323,9 +322,14 @@ This is an automatically generated, long-lived PR for reviewing all commits rela
 EOF
 )
 
-COMMIT_LIST_BODY=""
-if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
-    COMMIT_LIST_BODY+="
+if [ -z "$EXISTING_PR_URL" ]; then
+    echo "🤝 No existing PR found. Creating a new draft PR..."
+    PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
+    
+    # --- Construct PR Body for NEW PR ---
+    COMMIT_LIST_BODY=""
+    if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
+        COMMIT_LIST_BODY+="
 
 ---
 
@@ -334,29 +338,20 @@ if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
 | Date & Time (UTC) | Commit | Description |
 |---|---|---|
 "
-    for hash in "${COMMIT_ARRAY[@]}"; do
-        commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
-        commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
-        commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-        commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
-        commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
-        commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
-        
-        # Create the markdown link for the commit
-        commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${commit_hash_full})"
-        
-        COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
+        for hash in "${COMMIT_ARRAY[@]}"; do
+            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+            commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
+            commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
+            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
+            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
+            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
+            # Use the canonical commit link since the PR doesn't exist yet.
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${commit_hash_full})"
+            COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
 "
-    done
-fi
-
-FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
-# --- End of PR Body Construction ---
-
-
-if [ -z "$EXISTING_PR_URL" ]; then
-    echo "🤝 No existing PR found. Creating a new draft PR..."
-    PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
+        done
+    fi
+    FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
     
     CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$FINAL_PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
     if [ -n "$ASSIGNEE_STRING" ]; then
@@ -368,6 +363,34 @@ if [ -z "$EXISTING_PR_URL" ]; then
     if [ $? -eq 0 ]; then echo "🎉 Success! New draft PR created at: $NEW_PR_URL"; else echo "❌ Error: Failed to create Pull Request."; fi
 else
     echo "✅ Existing PR has been updated with the latest changes."
+    
+    # --- Construct PR Body for EXISTING PR ---
+    PR_NUMBER=$(gh pr view "$EXISTING_PR_URL" --json number --jq '.number')
+    COMMIT_LIST_BODY=""
+    if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
+        COMMIT_LIST_BODY+="
+
+---
+
+### Commits Included in this Review
+
+| Date & Time (UTC) | Commit | Description |
+|---|---|---|
+"
+        for hash in "${COMMIT_ARRAY[@]}"; do
+            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+            commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
+            commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
+            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
+            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
+            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
+            # Use the PR-specific commit link now that we have the PR number.
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${commit_hash_full})"
+            COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
+"
+        done
+    fi
+    FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
     
     echo "📝 Updating the PR body with the latest commit list..."
     gh pr edit "$EXISTING_PR_URL" --body "$FINAL_PR_BODY"
