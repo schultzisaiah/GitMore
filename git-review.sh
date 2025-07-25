@@ -331,15 +331,21 @@ if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
 
 ### Commits Included in this Review
 
-| Date | Commit | Description |
+| Date & Time (UTC) | Commit | Description |
 |---|---|---|
 "
     for hash in "${COMMIT_ARRAY[@]}"; do
-        commit_info=$(git show -s --format='%ci|`%h`|%s' "$hash")
-        commit_date=$(echo "$commit_info" | cut -d'|' -f1 | cut -d' ' -f1)
-        commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
-        commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
-        COMMIT_LIST_BODY+="${commit_date}|${commit_hash_short}|${commit_subject}
+        commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+        commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
+        commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
+        commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
+        commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
+        commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
+        
+        # Create the markdown link for the commit
+        commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${commit_hash_full})"
+        
+        COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
 "
     done
 fi
