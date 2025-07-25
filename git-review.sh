@@ -6,7 +6,8 @@
 #
 # This script creates a "virtual" branch containing all commits for a specific
 # ticket ID. It intelligently combines commits from main and the remote review
-# branch, and then creates/updates a PR, auto-assigning commit authors.
+# branch, and then creates/updates a PR, auto-assigning commit authors and
+# linking to related PRs in other repositories.
 #
 # It also includes a self-updating mechanism and updates the PR body on changes.
 #
@@ -150,6 +151,7 @@ GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null)
 if [ -z "$GIT_REMOTE_URL" ]; then echo "❌ Error: Could not determine the remote 'origin' URL."; exit 1; fi
 GITHUB_REPO=$(echo "$GIT_REMOTE_URL" | sed -e 's/.*github.com[\/:]//' -e 's/\.git$//')
 if [ -z "$GITHUB_REPO" ]; then echo "❌ Error: Could not parse GitHub repo from URL: $GIT_REMOTE_URL"; exit 1; fi
+GITHUB_ORG=$(echo $GITHUB_REPO | cut -d'/' -f1)
 echo "✅ Detected repository: $GITHUB_REPO"
 
 # 7. Ensure local main branch is up-to-date
@@ -372,7 +374,12 @@ if [ -z "$EXISTING_PR_URL" ]; then
     fi
     
     NEW_PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
-    if [ $? -eq 0 ]; then echo "🎉 Success! New draft PR created at: $NEW_PR_URL"; else echo "❌ Error: Failed to create Pull Request."; fi
+    if [ $? -eq 0 ]; then 
+        echo "🎉 Success! New draft PR created at: $NEW_PR_URL"
+        EXISTING_PR_URL=$NEW_PR_URL # Set this so the cross-linking step runs
+    else 
+        echo "❌ Error: Failed to create Pull Request."
+    fi
 else
     echo "✅ Existing PR has been updated with the latest changes."
     
@@ -390,11 +397,12 @@ else
 |---|---|---|
 "
         for hash in "${COMMIT_ARRAY[@]}"; do
-            commit_info=$(git show -s --format='%ci|%h|%s' "$hash")
+            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
             commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
             commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
-            commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
+            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
+            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
+            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
             new_hash_for_link=${original_to_new_hash_map[$hash]}
             # Use the PR-specific commit link now that we have the PR number, with the NEW hash.
             commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${new_hash_for_link})"
@@ -427,6 +435,46 @@ else
     fi
     echo "➡️  Review it here: $EXISTING_PR_URL"
 fi
+
+# 16. Find and link related PRs across the organization
+if [ -n "$EXISTING_PR_URL" ]; then
+    echo "🔗 Searching for related PRs in the '$GITHUB_ORG' organization..."
+    # Search for open PRs in the org that contain the ticket ID.
+    RELATED_PRS=(${(f)"$(gh search prs --owner "$GITHUB_ORG" "$CANONICAL_TICKET_ID" --state open --json url --jq '.[] | .url')"})
+    
+    if [ ${#RELATED_PRS[@]} -gt 1 ]; then
+        echo "  - Found ${#RELATED_PRS[@]} related PRs. Updating them with links..."
+        
+        RELATED_PRS_BODY="
+
+---
+
+### Related Reviews
+"
+        for pr_url in "${RELATED_PRS[@]}"; do
+            RELATED_PRS_BODY+="* $pr_url
+"
+        done
+
+        # Loop through each found PR and update its body
+        for pr_url in "${RELATED_PRS[@]}"; do
+            echo "    - Updating $pr_url"
+            # Get the current body of the target PR
+            target_pr_body=$(gh pr view "$pr_url" --json body --jq '.body')
+            
+            # Remove any previous "Related Reviews" section to prevent duplicates
+            clean_body=$(echo "$target_pr_body" | sed -n '/---/,/### Related Reviews/!p')
+
+            # Append the new list
+            new_body="${clean_body}${RELATED_PRS_BODY}"
+            
+            gh pr edit "$pr_url" --body "$new_body"
+        done
+    else
+        echo "  - No other related PRs found."
+    fi
+fi
+
 
 # Go back to the main branch for safety.
 echo "↩️ Returning to '$MAIN_BRANCH' branch."
