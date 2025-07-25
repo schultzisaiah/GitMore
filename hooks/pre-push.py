@@ -22,11 +22,14 @@
 #    chmod +x .git/hooks/pre-push
 # 3. Install the required Python library:
 #    pip install requests
-# 4. Configure your ADO Personal Access Token. The script will find it if you:
+# 4. Create an ADO Personal Access Token, if you don't have one already.
+#    - Go to your ADO User Settings > Personal Access Tokens
+#    - Create a new token with 'Work Items (Read, write, and manage)' scope.
+# 5. Configure your ADO Personal Access Token. The script will find it if you:
 #    a) Set it in your shell config (e.g., ~/.zshrc or ~/.bash_profile):
 #       export ADO_TOKEN="your_token_here"
 #    b) OR export it in your current terminal session.
-# 5. Edit the Configuration variables in the section below to match your
+# 6. Edit the Configuration variables in the section below to match your
 #    repository's settings (e.g., REPO_MAIN_BRANCH, TAG_VALUE).
 #
 
