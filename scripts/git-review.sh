@@ -331,7 +331,7 @@ PR_BODY_HEADER=$(cat <<EOF
 This is an automatically generated, long-lived PR for reviewing all commits related to **$CANONICAL_TICKET_ID**. This PR should **NEVER** be merged.
 
 ---
-*Want to use this script for your own reviews? [Install \`git-review\` from this gist](https://gist.github.com/schultzisaiah/f25734903c466454c4f385032d3eba47).*
+*Want to use this script for your own reviews? [Install \`git-review\` from this repo](https://github.com/schultzisaiah/GitMore/blob/main/scripts/git-review.sh).*
 EOF
 )
 
@@ -359,7 +359,7 @@ if [ -z "$EXISTING_PR_URL" ]; then
             commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
             new_hash_for_link=${original_to_new_hash_map[$hash]}
             # Use the canonical commit link since the PR doesn't exist yet, but with the NEW hash.
-            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${new_hash_for_link})"
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${new_hash_for_link})"
             COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
 "
         done
