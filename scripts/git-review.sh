@@ -561,9 +561,9 @@ if [ ${#ALL_REPOS_WITH_COMMITS[@]} -gt 0 ]; then
             # The (i) flag searches for an exact index, which is a number.
             # The ((...)) context correctly evaluates the numeric result (0 for not found).
             if (( ${REPOS_WITH_PRS[(i)$repo]} )); then
-                echo "  - ✓ $repo (PR exists)"
+                echo "  - ✅ $repo"
             else
-                echo "  -   $repo"
+                echo "  - ◻️ $repo"
             fi
         done
         echo "   You may want to run 'git-review' in those repositories as well."
