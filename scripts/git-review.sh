@@ -86,10 +86,7 @@ fi
 # 3. Setup Git Hook Flag
 GIT_NO_VERIFY_FLAG=""
 if ! $GIT_HOOKS_ENABLED; then
-  echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
   GIT_NO_VERIFY_FLAG="--no-verify"
-else
-  echo "📢 Git hooks are enabled."
 fi
 
 # 4. Input Processing and Normalization
@@ -317,6 +314,9 @@ fi
 
 # 14. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
+if ! $GIT_HOOKS_ENABLED; then
+  echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
+fi
 git push -f $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
