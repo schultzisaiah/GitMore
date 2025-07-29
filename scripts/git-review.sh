@@ -99,6 +99,56 @@ checkForUpdates() {
     rm "$temp_file"
 }
 
+# --- PR Body Generation Function ---
+buildCommitListBody() {
+    local pr_url_for_links=$1
+    local commit_list_body=""
+
+    if [ ${#COMMIT_ARRAY[@]} -eq 0 ]; then
+        echo ""
+        return
+    fi
+
+    commit_list_body+="
+
+---
+
+### Commits Included in this Review
+
+| Date & Time (UTC) | Commit | Description |
+|---|---|---|
+"
+    # If we have a PR URL, get the PR number for building more specific commit links
+    local pr_number=""
+    if [ -n "$pr_url_for_links" ]; then
+        pr_number=$(gh pr view "$pr_url_for_links" --json number --jq '.number')
+    fi
+
+    for hash in "${COMMIT_ARRAY[@]}"; do
+        commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
+        commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
+        commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
+        commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
+        commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
+        commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
+        new_hash_for_link=${original_to_new_hash_map[$hash]}
+
+        local commit_link=""
+        # If we have a PR number, create a PR-specific commit link. Otherwise, create a general one.
+        if [ -n "$pr_number" ]; then
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${pr_number}/commits/${new_hash_for_link})"
+        else
+            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${new_hash_for_link})"
+        fi
+
+        commit_list_body+="${commit_datetime_utc}|${commit_link}|${commit_subject}
+"
+    done
+
+    echo "$commit_list_body"
+}
+
+
 # --- Script Logic ---
 
 # 1. Handle flags like --update or perform a standard update check.
@@ -389,31 +439,7 @@ if [ -z "$EXISTING_PR_URL" ]; then
     echo "🤝 No existing PR found. Creating a new draft PR..."
     PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
 
-    # --- Construct PR Body for NEW PR ---
-    COMMIT_LIST_BODY=""
-    if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
-        COMMIT_LIST_BODY+="
-
----
-
-### Commits Included in this Review
-
-| Date & Time (UTC) | Commit | Description |
-|---|---|---|
-"
-        for hash in "${COMMIT_ARRAY[@]}"; do
-            commit_info=$(git show -s --format='%ci|%h|%s' "$hash")
-            commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
-            commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f2)
-            commit_subject=$(echo "$commit_info" | cut -d'|' -f3)
-            new_hash_for_link=${original_to_new_hash_map[$hash]}
-            # Use the canonical commit link since the PR doesn't exist yet, but with the NEW hash.
-            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${new_hash_for_link})"
-            COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
-"
-        done
-    fi
+    COMMIT_LIST_BODY=$(buildCommitListBody "")
     FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
 
     CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$FINAL_PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
@@ -432,33 +458,7 @@ if [ -z "$EXISTING_PR_URL" ]; then
 else
     echo "✅ Existing PR has been updated with the latest changes."
 
-    # --- Construct PR Body for EXISTING PR ---
-    PR_NUMBER=$(gh pr view "$EXISTING_PR_URL" --json number --jq '.number')
-    COMMIT_LIST_BODY=""
-    if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
-        COMMIT_LIST_BODY+="
-
----
-
-### Commits Included in this Review
-
-| Date & Time (UTC) | Commit | Description |
-|---|---|---|
-"
-        for hash in "${COMMIT_ARRAY[@]}"; do
-            commit_info=$(git show -s --format='%ci|%H|%h|%s' "$hash")
-            commit_date_full=$(echo "$commit_info" | cut -d'|' -f1)
-            commit_datetime_utc=$(echo "$commit_date_full" | cut -d' ' -f1,2)
-            commit_hash_full=$(echo "$commit_info" | cut -d'|' -f2)
-            commit_hash_short=$(echo "$commit_info" | cut -d'|' -f3)
-            commit_subject=$(echo "$commit_info" | cut -d'|' -f4)
-            new_hash_for_link=${original_to_new_hash_map[$hash]}
-            # Use the PR-specific commit link now that we have the PR number, with the NEW hash.
-            commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${PR_NUMBER}/commits/${new_hash_for_link})"
-            COMMIT_LIST_BODY+="${commit_datetime_utc}|${commit_link}|${commit_subject}
-"
-        done
-    fi
+    COMMIT_LIST_BODY=$(buildCommitListBody "$EXISTING_PR_URL")
     FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
 
     echo "📝 Updating the PR body with the latest commit list..."
