@@ -378,6 +378,8 @@ EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" 
 PR_BODY_HEADER=$(cat <<EOF
 This is an automatically generated, long-lived PR for reviewing all commits related to **$CANONICAL_TICKET_ID**. This PR should **NEVER** be merged.
 
+Any manual edits to this PR description will be overwritten on the next auto-update. Use the comments/discussion instead of editing here.
+
 ---
 *Want to use this script for your own reviews? [Install \`git-review\` from this repo](https://github.com/schultzisaiah/GitMore/blob/main/scripts/git-review.sh).*
 EOF
