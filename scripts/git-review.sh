@@ -292,7 +292,7 @@ if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
     echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
     for hash in "${COMMIT_ARRAY[@]}"; do
       echo "  -> Picking $(git show -s --format='%h' "$hash")"
-      if ! git cherry-pick -x $GIT_NO_VERIFY_FLAG "$hash"; then
+      if ! git cherry-pick -x "$hash"; then
         echo "❌ ERROR: Cherry-pick of $hash failed. Please resolve conflicts and re-run."
         echo "To abort: 'git cherry-pick --abort' then 'git checkout $MAIN_BRANCH'."
         exit 1
