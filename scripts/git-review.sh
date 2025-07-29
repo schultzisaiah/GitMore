@@ -522,6 +522,39 @@ if [ -n "$EXISTING_PR_URL" ]; then
     done
 fi
 
+# 18. Find Related Commits Across Organization
+echo "---"
+echo "🔎 Searching for commits referencing '$CANONICAL_TICKET_ID' in other repositories..."
+# Use gh search to find commits in the org with the ticket ID in the commit message.
+# We get the full name of the repository for each commit found.
+ALL_REPOS_WITH_COMMITS=(${(f)"$(gh search commits "$CANONICAL_TICKET_ID" --owner "$GITHUB_ORG" --json repository --jq '.[] | .repository.fullName' 2>/dev/null)"})
+
+if [ ${#ALL_REPOS_WITH_COMMITS[@]} -gt 0 ]; then
+    # Get a unique list of repositories.
+    UNIQUE_REPOS=(${(u)ALL_REPOS_WITH_COMMITS})
+
+    # Filter out the current repository from the list.
+    OTHER_REPOS=()
+    for repo in "${UNIQUE_REPOS[@]}"; do
+        if [ "$repo" != "$GITHUB_REPO" ]; then
+            OTHER_REPOS+=("$repo")
+        fi
+    done
+
+    if [ ${#OTHER_REPOS[@]} -gt 0 ]; then
+        echo "✨ Found commits in other repositories:"
+        for repo in "${OTHER_REPOS[@]}"; do
+            echo "  - $repo"
+        done
+        echo "   You may want to run 'git-review' in those repositories as well."
+    else
+        echo "✅ No other repositories in '$GITHUB_ORG' found with commits for this ticket."
+    fi
+else
+    echo "✅ No repositories in '$GITHUB_ORG' found with commits for this ticket."
+fi
+echo "---"
+
 
 # Go back to the main branch for safety.
 echo "↩️  Returning to '$MAIN_BRANCH' branch."
