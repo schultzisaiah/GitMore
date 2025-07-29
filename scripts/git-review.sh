@@ -9,7 +9,8 @@
 # branch, and then creates/updates a PR, auto-assigning commit authors and
 # linking to related PRs in other repositories.
 #
-# It also includes a self-updating mechanism and updates the PR body on changes.
+# It also includes a self-updating mechanism, updates the PR body on changes,
+# and now searches for related commits across all repositories in the organization.
 #
 # DEPENDENCIES:
 # - git
@@ -483,10 +484,14 @@ else
 fi
 
 # 17. Find and link related PRs across the organization
+REPOS_WITH_PRS=()
 if [ -n "$EXISTING_PR_URL" ]; then
     echo "🔗 Searching for related PRs in the '$GITHUB_ORG' organization..."
     # Search for open PRs in the org that contain the ticket ID.
-    RELATED_PRS=(${(f)"$(gh search prs --owner "$GITHUB_ORG" "$CANONICAL_TICKET_ID" --state open --json url --jq '.[] | .url')"})
+    # We get both the URL and the repository fullName for later use.
+    RELATED_PRS_JSON=$(gh search prs --owner "$GITHUB_ORG" "$CANONICAL_TICKET_ID" --state open --json url,repository --jq '.')
+    RELATED_PRS=(${(f)"$(echo "$RELATED_PRS_JSON" | jq -r '.[] | .url')"})
+    REPOS_WITH_PRS=(${(u)"$(echo "$RELATED_PRS_JSON" | jq -r '.[] | .repository.fullName')"})
 
     RELATED_REVIEWS_MARKER="
 
@@ -501,8 +506,13 @@ if [ -n "$EXISTING_PR_URL" ]; then
         RELATED_PRS_BODY+="${RELATED_REVIEWS_MARKER}
 "
         for pr_url in "${RELATED_PRS[@]}"; do
-            RELATED_PRS_BODY+="* $pr_url
+            if [ "$pr_url" = "$EXISTING_PR_URL" ]; then
+                RELATED_PRS_BODY+="* $pr_url (this PR)
 "
+            else
+                RELATED_PRS_BODY+="* $pr_url
+"
+            fi
         done
     fi
 
@@ -544,7 +554,12 @@ if [ ${#ALL_REPOS_WITH_COMMITS[@]} -gt 0 ]; then
     if [ ${#OTHER_REPOS[@]} -gt 0 ]; then
         echo "✨ Found commits in other repositories:"
         for repo in "${OTHER_REPOS[@]}"; do
-            echo "  - $repo"
+            # Check if the repository is in our list of repos that already have a PR.
+            if [[ " ${REPOS_WITH_PRS[@]} " =~ " $repo " ]]; then
+                echo "  - ✓ $repo (PR exists)"
+            else
+                echo "  -   $repo"
+            fi
         done
         echo "   You may want to run 'git-review' in those repositories as well."
     else
