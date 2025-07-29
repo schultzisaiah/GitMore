@@ -499,37 +499,40 @@ if [ -n "$EXISTING_PR_URL" ]; then
 
 ### Related Reviews"
 
-    RELATED_PRS_BODY=""
+    # Only proceed if there are multiple PRs to link.
     if [ ${#RELATED_PRS[@]} -gt 1 ]; then
         echo "  - Found ${#RELATED_PRS[@]} related PRs. Updating them with links..."
 
-        RELATED_PRS_BODY+="${RELATED_REVIEWS_MARKER}
+        # Loop through each found PR to update its body
+        for target_pr_url in "${RELATED_PRS[@]}"; do
+            echo "    - Updating $target_pr_url"
+
+            # --- Build the body specifically for this target PR ---
+            local current_pr_body="${RELATED_REVIEWS_MARKER}
 "
-        for pr_url in "${RELATED_PRS[@]}"; do
-            if [ "$pr_url" = "$EXISTING_PR_URL" ]; then
-                RELATED_PRS_BODY+="* $pr_url (this PR)
+            for pr_to_list in "${RELATED_PRS[@]}"; do
+                if [ "$pr_to_list" = "$target_pr_url" ]; then
+                    current_pr_body+="* $pr_to_list (this PR)
 "
-            else
-                RELATED_PRS_BODY+="* $pr_url
+                else
+                    current_pr_body+="* $pr_to_list
 "
-            fi
+                fi
+            done
+            # --- End of body building ---
+
+            # Get the current body of the target PR
+            target_pr_body_content=$(gh pr view "$target_pr_url" --json body --jq '.body')
+
+            # Remove any previous "Related Reviews" section using string manipulation
+            base_body=${target_pr_body_content%%$RELATED_REVIEWS_MARKER*}
+
+            # Append the new, correctly marked-up list
+            new_body="${base_body}${current_pr_body}"
+
+            gh pr edit "$target_pr_url" --body "$new_body"
         done
     fi
-
-    # Loop through each found PR and update its body
-    for pr_url in "${RELATED_PRS[@]}"; do
-        echo "    - Updating $pr_url"
-        # Get the current body of the target PR
-        target_pr_body=$(gh pr view "$pr_url" --json body --jq '.body')
-
-        # Remove any previous "Related Reviews" section using string manipulation
-        base_body=${target_pr_body%%$RELATED_REVIEWS_MARKER*}
-
-        # Append the new list (which will be empty if there's only one PR)
-        new_body="${base_body}${RELATED_PRS_BODY}"
-
-        gh pr edit "$pr_url" --body "$new_body"
-    done
 fi
 
 # 18. Find Related Commits Across Organization
