@@ -169,7 +169,7 @@ echo "✅ Detected repository: $GITHUB_REPO"
 
 # 8. Ensure local main branch is up-to-date
 echo "🔄 Pulling latest changes for '$MAIN_BRANCH'..."
-if ! git checkout $GIT_NO_VERIFY_FLAG "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
+if ! git checkout "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
     echo "❌ Error: Could not check out or pull latest from '$MAIN_BRANCH'."; exit 1
 fi
 echo "✅ '$MAIN_BRANCH' is up-to-date."
@@ -284,7 +284,7 @@ if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
   echo "♻️ Deleting existing local branch '$REVIEW_BRANCH_NAME' to rebuild it."
   git branch -D "$REVIEW_BRANCH_NAME"
 fi
-git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH" $GIT_NO_VERIFY_FLAG
+git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to create new branch '$REVIEW_BRANCH_NAME'."; exit 1; fi
 
 # 12. Cherry-pick the commits
@@ -491,4 +491,4 @@ fi
 
 # Go back to the main branch for safety.
 echo "↩️  Returning to '$MAIN_BRANCH' branch."
-git checkout $GIT_NO_VERIFY_FLAG "$MAIN_BRANCH" > /dev/null 2>&1
+git checkout "$MAIN_BRANCH" > /dev/null 2>&1
