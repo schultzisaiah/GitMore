@@ -558,7 +558,9 @@ if [ ${#ALL_REPOS_WITH_COMMITS[@]} -gt 0 ]; then
         echo "✨ Found commits in other repositories:"
         for repo in "${OTHER_REPOS[@]}"; do
             # Check if the repository is in our list of repos that already have a PR.
-            if (( ${REPOS_WITH_PRS[(Ie)$repo]} )); then
+            # The (i) flag searches for an exact index, which is a number.
+            # The ((...)) context correctly evaluates the numeric result (0 for not found).
+            if (( ${REPOS_WITH_PRS[(i)$repo]} )); then
                 echo "  - ✓ $repo (PR exists)"
             else
                 echo "  -   $repo"
