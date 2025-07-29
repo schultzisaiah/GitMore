@@ -61,6 +61,9 @@ TAG_VALUE = "App:TODO"
 # Your Azure DevOps organization and project details
 ADO_ORG = "tr-legal-tech"
 ADO_PROJECT = "FindLaw"
+# A list of branch prefixes. If a branch being pushed to starts with any of these
+# strings, ADO processing will be skipped for that branch.
+BRANCHES_TO_SKIP = ['CR/']
 
 def get_token_from_shell_config():
   """
@@ -235,7 +238,7 @@ def add_tag(ticket_nums, tag_value, iteration_value):
   """
   Adds tags and sets the 'Fixed in Iteration' field for Azure DevOps work items.
   """
-  print_status("�", f"Preparing to update {len(ticket_nums)} ticket(s)...")
+  print_status("⏳", f"Preparing to update {len(ticket_nums)} ticket(s)...")
   url = f"https://dev.azure.com/{ADO_ORG}/{ADO_PROJECT}/_apis/wit/workitems/{{}}?api-version=7.0"
   headers = {"Content-Type": "application/json-patch+json"}
 
@@ -277,13 +280,15 @@ def process_commits(local_ref, local_sha, remote_sha, default_branch):
   Processes commits in a given range to extract ticket numbers and add tags.
   """
   try:
-    branch_name = local_ref.split('/')[-1]
+    # Extract the full branch name, e.g., 'feature/my-branch' from 'refs/heads/feature/my-branch'
+    branch_name = local_ref.replace('refs/heads/', '', 1)
     print_status("🌿", f"Processing push to branch: {branch_name}")
 
-    # If the branch is a Code Review branch, skip ADO processing.
-    if branch_name.upper().startswith('CR/'):
-      print_status("➡️", "Skipping ADO updates for Code Review branch.")
-      return
+    # Check if the current branch should be skipped based on the configured prefixes.
+    for prefix in BRANCHES_TO_SKIP:
+      if branch_name.startswith(prefix):
+        print_status("➡️", f"Skipping ADO updates for branch '{branch_name}' because it matches the skip rule: '{prefix}'.")
+        return
 
     # If remote_sha is all zeros, it's a new branch
     if remote_sha == "0000000000000000000000000000000000000000":
@@ -339,11 +344,10 @@ def main():
   else:
     print_status("✅", "ADO Token is configured.")
 
-  # --- Run Tests (Optional) ---
-  # Uncomment the following lines to enforce passing tests before push
-  # if not run_gradle_tests():
-  #     print_status("❌", "Tests failed. Aborting push.", is_error=True)
-  #     sys.exit(1)
+  # --- Run Tests ---
+  if not run_gradle_tests():
+    print_status("❌", "Tests failed. Aborting push.", is_error=True)
+    sys.exit(1)
 
   # --- Process Commits ---
   stdin_lines = sys.stdin.readlines()
@@ -363,7 +367,7 @@ def main():
       continue
 
     local_ref, local_sha, remote_ref, remote_sha = line.split()
-    process_commits(local_ref, local_sha, remote_ref, remote_sha, default_branch)
+    process_commits(local_ref, local_sha, remote_sha, default_branch)
 
   print_status("🏁", "--- Pre-Push Hook Finished ---")
 
@@ -374,5 +378,3 @@ if __name__ == "__main__":
     print_status("❌", "This script must be run from the root of a Git repository.", is_error=True)
     sys.exit(1)
   main()
-
-�
