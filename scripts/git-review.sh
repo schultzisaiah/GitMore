@@ -23,11 +23,13 @@
 #
 # USAGE:
 # git-review <TicketID> [MainBranch]
+# git-review --update
 #
 # EXAMPLES:
 # git-review "AB#1234"
 # git-review "#5678"
 # git-review "ab5678" develop
+# git-review --update
 #
 
 # --- Configuration ---
@@ -45,16 +47,37 @@ GIT_HOOKS_ENABLED=false
 
 # --- Self-Update Function ---
 checkForUpdates() {
+    local force_check=$1
+    local update_url="$SCRIPT_URL"
+
+    if [ "$force_check" = "true" ]; then
+        local check_message="🚀 Force-checking for script updates..."
+        # Append a cache-busting query parameter using the current Unix timestamp.
+        update_url="${SCRIPT_URL}?cb=$(date +%s)"
+    fi
+
+    # Only print the "checking" message on a forced run.
+    if [ "$force_check" = "true" ]; then
+        echo "$check_message"
+    fi
+
     # Get the absolute path of the currently running script using a zsh-native method.
     local script_path="${(%):-%x}"
     # Create a temporary file to download the latest version.
     local temp_file=$(mktemp)
 
     # Download the latest version of the script with a 3-second timeout.
-    if ! curl -sSL --max-time 3 "$SCRIPT_URL" -o "$temp_file"; then
-        echo "⚠️  Warning: Could not check for script updates. Continuing..."
-        rm "$temp_file"
-        return
+    if ! curl -sSL --max-time 3 "$update_url" -o "$temp_file"; then
+        # Only show a warning on a normal run. On a forced run, it's an error.
+        if [ "$force_check" = "true" ]; then
+            echo "❌ Error: Could not download script from $update_url"
+            rm "$temp_file"
+            exit 1
+        else
+            echo "⚠️  Warning: Could not check for script updates. Continuing..."
+            rm "$temp_file"
+            return
+        fi
     fi
 
     # Check if there's a difference between the current script and the new one.
@@ -65,6 +88,11 @@ checkForUpdates() {
         chmod +x "$script_path"
         echo "✅ Script updated successfully. Please re-run your command."
         exit 0
+    else
+        # If this was a forced check, notify the user they're up-to-date.
+        if [ "$force_check" = "true" ]; then
+            echo "✅ You are already running the latest version."
+        fi
     fi
 
     rm "$temp_file"
@@ -72,13 +100,19 @@ checkForUpdates() {
 
 # --- Script Logic ---
 
-# 1. Check for updates before doing anything else.
+# 1. Handle flags like --update or perform a standard update check.
+if [ "$1" = "--update" ]; then
+  checkForUpdates true
+  exit 0
+fi
+# On normal runs, quietly check for updates.
 checkForUpdates
 
 # 2. Input Validation
 if [ -z "$1" ]; then
   echo "❌ Error: No Ticket ID provided."
   echo "Usage: $0 \"<TicketID>\" [MainBranch]"
+  echo "   or: $0 --update"
   echo "Example: $0 \"AB#1234\""
   exit 1
 fi
