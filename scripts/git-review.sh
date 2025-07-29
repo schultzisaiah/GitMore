@@ -38,6 +38,10 @@ REVIEW_BRANCH_PREFIX="CR"
 TICKET_PREFIX="AB#"
 # The URL to the raw script content for self-updating.
 SCRIPT_URL="https://raw.githubusercontent.com/schultzisaiah/GitMore/refs/heads/main/scripts/git-review.sh"
+# Set to 'true' to allow git hooks (e.g., pre-commit, pre-push) to run.
+# Set to 'false' to bypass hooks for script operations using '--no-verify'.
+GIT_HOOKS_ENABLED=false
+
 
 # --- Self-Update Function ---
 checkForUpdates() {
@@ -79,7 +83,16 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-# 3. Input Processing and Normalization
+# 3. Setup Git Hook Flag
+GIT_NO_VERIFY_FLAG=""
+if ! $GIT_HOOKS_ENABLED; then
+  echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
+  GIT_NO_VERIFY_FLAG="--no-verify"
+else
+  echo "📢 Git hooks are enabled."
+fi
+
+# 4. Input Processing and Normalization
 TICKET_NUMBER=$(echo "$1" | tr -dc '0-9')
 if [ -z "$TICKET_NUMBER" ]; then
     echo "❌ Error: Could not find any numbers in the provided Ticket ID '$1'."
@@ -92,7 +105,7 @@ REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 echo "🚀 Starting review preparation for Ticket ID: $CANONICAL_TICKET_ID"
 echo "🌿 Review branch will be: $REVIEW_BRANCH_NAME"
 
-# 4. Pre-flight Checks
+# 5. Pre-flight Checks
 if [ -n "$(git status --porcelain)" ]; then
   echo "❌ Error: Your workspace has uncommitted changes."
   echo "Please commit, stash, or discard your changes before running this script."
@@ -114,7 +127,7 @@ if [ ${#missing_deps[@]} -gt 0 ]; then
 fi
 echo "✅ Workspace is clean. Dependencies are met."
 
-# 5. Determine Main Branch
+# 6. Determine Main Branch
 MAIN_BRANCH=""
 if [ -n "$2" ]; then
     MAIN_BRANCH="$2"
@@ -145,7 +158,7 @@ if [ -z "$MAIN_BRANCH" ]; then
     exit 1
 fi
 
-# 6. Auto-detect GitHub Repo
+# 7. Auto-detect GitHub Repo
 echo "🔎 Auto-detecting GitHub repository..."
 GIT_REMOTE_URL=$(git remote get-url origin 2>/dev/null)
 if [ -z "$GIT_REMOTE_URL" ]; then echo "❌ Error: Could not determine the remote 'origin' URL."; exit 1; fi
@@ -154,14 +167,14 @@ if [ -z "$GITHUB_REPO" ]; then echo "❌ Error: Could not parse GitHub repo from
 GITHUB_ORG=$(echo $GITHUB_REPO | cut -d'/' -f1)
 echo "✅ Detected repository: $GITHUB_REPO"
 
-# 7. Ensure local main branch is up-to-date
+# 8. Ensure local main branch is up-to-date
 echo "🔄 Pulling latest changes for '$MAIN_BRANCH'..."
-if ! git checkout "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
+if ! git checkout $GIT_NO_VERIFY_FLAG "$MAIN_BRANCH" > /dev/null 2>&1 || ! git pull origin "$MAIN_BRANCH" > /dev/null 2>&1; then
     echo "❌ Error: Could not check out or pull latest from '$MAIN_BRANCH'."; exit 1
 fi
 echo "✅ '$MAIN_BRANCH' is up-to-date."
 
-# 8. Find all commits related to the ticket from ALL sources
+# 9. Find all commits related to the ticket from ALL sources
 echo " gathering commits..."
 # Source 1: Tagged commits from the main branch
 MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID" -i --pretty=format:"%H")"})
@@ -225,7 +238,7 @@ if [ -n "$OLD_HEAD" ]; then
         if [ -z "$hash" ]; then continue; fi
         old_patch_ids[$(git show "$hash" | git patch-id | cut -d' ' -f1)]=1
     done
-    
+
     typeset -A new_patch_ids
     for hash in "${COMMIT_ARRAY[@]}"; do
         if [ -z "$hash" ]; then continue; fi
@@ -253,7 +266,7 @@ fi
 echo "🔍 Found ${#COMMIT_ARRAY[@]} unique commits to be included in the review:"
 for hash in "${COMMIT_ARRAY[@]}"; do echo "  - $(git show -s --format='%h %s' "$hash")"; done
 
-# 9. Determine the starting point for the new branch
+# 10. Determine the starting point for the new branch
 # Handle case where all commits were reverted
 if [ ${#COMMIT_ARRAY[@]} -eq 0 ]; then
     # If no commits are left, we can't create a branch. We'll push an empty one later.
@@ -266,20 +279,20 @@ fi
 if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not determine a starting point for the branch."; exit 1; fi
 echo "🌱 Creating review branch from starting point: $(git show -s --format='%h %s' "$STARTING_POINT_HASH")"
 
-# 10. Create or reset the review branch
+# 11. Create or reset the review branch
 if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
   echo "♻️ Deleting existing local branch '$REVIEW_BRANCH_NAME' to rebuild it."
   git branch -D "$REVIEW_BRANCH_NAME"
 fi
-git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
+git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH" $GIT_NO_VERIFY_FLAG
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to create new branch '$REVIEW_BRANCH_NAME'."; exit 1; fi
 
-# 11. Cherry-pick the commits
+# 12. Cherry-pick the commits
 if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
     echo "🍒 Cherry-picking commits onto '$REVIEW_BRANCH_NAME'..."
     for hash in "${COMMIT_ARRAY[@]}"; do
       echo "  -> Picking $(git show -s --format='%h' "$hash")"
-      if ! git cherry-pick -x "$hash"; then
+      if ! git cherry-pick -x $GIT_NO_VERIFY_FLAG "$hash"; then
         echo "❌ ERROR: Cherry-pick of $hash failed. Please resolve conflicts and re-run."
         echo "To abort: 'git cherry-pick --abort' then 'git checkout $MAIN_BRANCH'."
         exit 1
@@ -290,7 +303,7 @@ else
     echo "✅ No commits to cherry-pick. The branch will be empty of this feature's changes."
 fi
 
-# 12. Map original commit hashes to their new cherry-picked hashes
+# 13. Map original commit hashes to their new cherry-picked hashes
 typeset -A original_to_new_hash_map
 if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
     echo "🗺️  Mapping new commit hashes to original hashes..."
@@ -302,14 +315,14 @@ if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
     done
 fi
 
-# 13. Push the branch to the remote
+# 14. Push the branch to the remote
 echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
-git push -f origin "$REVIEW_BRANCH_NAME"
+git push -f $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
 if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
 echo "✅ Branch pushed successfully."
 NEW_HEAD=$(git rev-parse "$REVIEW_BRANCH_NAME")
 
-# 14. Find commit authors and map to GitHub users
+# 15. Find commit authors and map to GitHub users
 echo "👥 Finding commit authors to assign to the PR..."
 ASSIGNEES=()
 for hash in "${COMMIT_ARRAY[@]}"; do
@@ -323,7 +336,7 @@ done
 UNIQUE_ASSIGNEES=("${(@u)ASSIGNEES}")
 ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 
-# 15. Create or update the Pull Request
+# 16. Create or update the Pull Request
 echo "🔎 Checking for an existing Pull Request..."
 EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
@@ -338,7 +351,7 @@ EOF
 if [ -z "$EXISTING_PR_URL" ]; then
     echo "🤝 No existing PR found. Creating a new draft PR..."
     PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
-    
+
     # --- Construct PR Body for NEW PR ---
     COMMIT_LIST_BODY=""
     if [ ${#COMMIT_ARRAY[@]} -gt 0 ]; then
@@ -365,23 +378,23 @@ if [ -z "$EXISTING_PR_URL" ]; then
         done
     fi
     FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
-    
+
     CREATE_ARGS=("--repo" "$GITHUB_REPO" "--draft" "--title" "$PR_TITLE" "--body" "$FINAL_PR_BODY" "--head" "$REVIEW_BRANCH_NAME" "--base" "$MAIN_BRANCH")
     if [ -n "$ASSIGNEE_STRING" ]; then
         echo "  - Assigning users: $ASSIGNEE_STRING"
         CREATE_ARGS+=("--assignee" "$ASSIGNEE_STRING")
     fi
-    
+
     NEW_PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
-    if [ $? -eq 0 ]; then 
+    if [ $? -eq 0 ]; then
         echo "🎉 Success! New draft PR created at: $NEW_PR_URL"
         EXISTING_PR_URL=$NEW_PR_URL # Set this so the cross-linking step runs
-    else 
+    else
         echo "❌ Error: Failed to create Pull Request."
     fi
 else
     echo "✅ Existing PR has been updated with the latest changes."
-    
+
     # --- Construct PR Body for EXISTING PR ---
     PR_NUMBER=$(gh pr view "$EXISTING_PR_URL" --json number --jq '.number')
     COMMIT_LIST_BODY=""
@@ -410,10 +423,10 @@ else
         done
     fi
     FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
-    
+
     echo "📝 Updating the PR body with the latest commit list..."
     gh pr edit "$EXISTING_PR_URL" --body "$FINAL_PR_BODY"
-    
+
     # Update assignees
     if [ -n "$ASSIGNEE_STRING" ]; then
         CURRENT_ASSIGNEES=($(gh pr view "$EXISTING_PR_URL" --json assignees --jq '.assignees.[].login'))
@@ -423,7 +436,7 @@ else
                 ASSIGNEES_TO_ADD+=("$user")
             fi
         done
-        
+
         if [ ${#ASSIGNEES_TO_ADD[@]} -gt 0 ]; then
             ADD_ASSIGNEE_STRING=$(echo ${(j:,:)ASSIGNEES_TO_ADD})
             echo "  - Adding new contributors as assignees: $ADD_ASSIGNEE_STRING"
@@ -435,22 +448,22 @@ else
     echo "➡️  Review it here: $EXISTING_PR_URL"
 fi
 
-# 16. Find and link related PRs across the organization
+# 17. Find and link related PRs across the organization
 if [ -n "$EXISTING_PR_URL" ]; then
     echo "🔗 Searching for related PRs in the '$GITHUB_ORG' organization..."
     # Search for open PRs in the org that contain the ticket ID.
     RELATED_PRS=(${(f)"$(gh search prs --owner "$GITHUB_ORG" "$CANONICAL_TICKET_ID" --state open --json url --jq '.[] | .url')"})
-    
+
     RELATED_REVIEWS_MARKER="
 
 ---
 
 ### Related Reviews"
-    
+
     RELATED_PRS_BODY=""
     if [ ${#RELATED_PRS[@]} -gt 1 ]; then
         echo "  - Found ${#RELATED_PRS[@]} related PRs. Updating them with links..."
-        
+
         RELATED_PRS_BODY+="${RELATED_REVIEWS_MARKER}
 "
         for pr_url in "${RELATED_PRS[@]}"; do
@@ -464,13 +477,13 @@ if [ -n "$EXISTING_PR_URL" ]; then
         echo "    - Updating $pr_url"
         # Get the current body of the target PR
         target_pr_body=$(gh pr view "$pr_url" --json body --jq '.body')
-        
+
         # Remove any previous "Related Reviews" section using string manipulation
         base_body=${target_pr_body%%$RELATED_REVIEWS_MARKER*}
 
         # Append the new list (which will be empty if there's only one PR)
         new_body="${base_body}${RELATED_PRS_BODY}"
-        
+
         gh pr edit "$pr_url" --body "$new_body"
     done
 fi
@@ -478,5 +491,4 @@ fi
 
 # Go back to the main branch for safety.
 echo "↩️  Returning to '$MAIN_BRANCH' branch."
-git checkout "$MAIN_BRANCH" > /dev/null 2>&1
-
+git checkout $GIT_NO_VERIFY_FLAG "$MAIN_BRANCH" > /dev/null 2>&1
