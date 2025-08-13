@@ -181,7 +181,7 @@ runPostCherryPickActions() {
     echo "👥 Finding commit authors to assign to the PR..."
     ASSIGNEES=()
     for hash in "${original_commits_array[@]}"; do
-        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty' 2>/dev/null)
+        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty')
         if [ -n "$login" ]; then
             ASSIGNEES+=("$login")
         else
