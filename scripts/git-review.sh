@@ -181,7 +181,7 @@ runPostCherryPickActions() {
     echo "👥 Finding commit authors to assign to the PR..."
     ASSIGNEES=()
     for hash in "${original_commits_array[@]}"; do
-        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty')
+        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty' 2>/dev/null)
         if [ -n "$login" ]; then
             ASSIGNEES+=("$login")
         else
@@ -599,8 +599,7 @@ if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
 fi
 git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 
-# 12. Start the cherry-pick process
+# 12. Source the environment and start the process
+source "$STATE_FILE"
 perform_cherry_picks
-
-# 13. Run all subsequent actions
 runPostCherryPickActions
