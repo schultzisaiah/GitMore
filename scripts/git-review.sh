@@ -149,6 +149,7 @@ buildCommitListBody() {
         if [ -n "$pr_number" ] && [ -n "$new_hash_for_link" ]; then
             commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/pull/${pr_number}/commits/${new_hash_for_link})"
         else
+            # Fallback to general commit link if PR or new hash isn't available
             commit_link="[\`${commit_hash_short}\`](https://github.com/$GITHUB_REPO/commit/${commit_hash_full})"
         fi
 
@@ -166,7 +167,7 @@ runPostCherryPickActions() {
     echo "✅ All commits have been processed."
     source "$STATE_FILE" # Load variables like GITHUB_REPO, etc.
 
-    # 14. Push the branch to the remote
+    # Push the branch to the remote
     echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
     if ! $GIT_HOOKS_ENABLED; then
       echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
@@ -175,7 +176,7 @@ runPostCherryPickActions() {
     if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
     echo "✅ Branch pushed successfully."
 
-    # 15. Find commit authors
+    # Find commit authors
     local original_commits_array=("${(@f)"$(cat "$ORIGINAL_COMMITS_FILE")"}")
     echo "👥 Finding commit authors to assign to the PR..."
     ASSIGNEES=()
@@ -190,7 +191,7 @@ runPostCherryPickActions() {
     UNIQUE_ASSIGNEES=("${(@u)ASSIGNEES}")
     ASSIGNEE_STRING=$(echo ${(j:,:)UNIQUE_ASSIGNEES})
 
-    # 16. Create or update the Pull Request
+    # Create or update the Pull Request
     echo "🔎 Checking for an existing Pull Request..."
     EXISTING_PR_URL=$(gh pr list --repo "$GITHUB_REPO" --head "$REVIEW_BRANCH_NAME" --json url --jq '.[0].url' 2>/dev/null)
 
@@ -233,7 +234,7 @@ EOF
         echo "➡️  Review it here: $EXISTING_PR_URL"
     fi
 
-    # 17. Find and link related PRs across the organization
+    # Find and link related PRs across the organization
     REPOS_WITH_PRS=()
     if [ -n "$EXISTING_PR_URL" ]; then
         echo "🔗 Searching for related PRs in the '$GITHUB_ORG' organization..."
@@ -270,7 +271,7 @@ EOF
         fi
     fi
 
-    # 18. Find Related Commits Across Organization
+    # Find Related Commits Across Organization
     echo "---"
     echo "🔎 Searching for commits referencing '$CANONICAL_TICKET_ID' in other repositories..."
     ALL_REPOS_WITH_COMMITS=(${(f)"$(gh search commits "$CANONICAL_TICKET_ID" --owner "$GITHUB_ORG" --json repository --jq '.[] | .repository.fullName' 2>/dev/null)"})
@@ -371,7 +372,13 @@ handle_continue() {
         exit 1
     fi
 
-    echo "✅ Conflict resolved. Continuing with remaining commits..."
+    echo "✅ Conflict resolved. Updating state for the completed commit..."
+    # The user has run 'git cherry-pick --continue', so HEAD is now the newly created commit.
+    # We need to record its hash and remove the original hash from our to-do list.
+    git rev-parse HEAD >> "$NEW_HASHES_FILE"
+    tail -n +2 "$COMMITS_TO_PICK_FILE" > "$COMMITS_TO_PICK_FILE.tmp" && mv "$COMMITS_TO_PICK_FILE.tmp" "$COMMITS_TO_PICK_FILE"
+
+    echo "✅ State updated. Continuing with remaining commits..."
     perform_cherry_picks
     runPostCherryPickActions
 }
@@ -399,8 +406,11 @@ handle_abort() {
     local review_branch_from_state
     review_branch_from_state=$(grep 'REVIEW_BRANCH_NAME=' "$STATE_FILE" | cut -d"'" -f2)
 
-    echo "  - Deleting temporary review branch '$review_branch_from_state'..."
-    git branch -D "$review_branch_from_state"
+    if git show-ref --verify --quiet "refs/heads/$review_branch_from_state"; then
+        echo "  - Deleting temporary review branch '$review_branch_from_state'..."
+        git branch -D "$review_branch_from_state"
+    fi
+
     echo "  - Cleaning up state files..."
     rm -rf "$STATE_DIR"
     echo "✅ Abort complete."
