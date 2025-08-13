@@ -181,7 +181,7 @@ runPostCherryPickActions() {
     echo "👥 Finding commit authors to assign to the PR..."
     ASSIGNEES=()
     for hash in "${original_commits_array[@]}"; do
-        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty')
+        login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty' 2>/dev/null)
         if [ -n "$login" ]; then
             ASSIGNEES+=("$login")
         else
@@ -580,14 +580,14 @@ echo "📝 Setting up state for a resumable operation..."
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 (
-    echo "MAIN_BRANCH='$MAIN_BRANCH'"
-    echo "REVIEW_BRANCH_NAME='$REVIEW_BRANCH_NAME'"
-    echo "STARTING_POINT_HASH='$STARTING_POINT_HASH'"
-    echo "CANONICAL_TICKET_ID='$CANONICAL_TICKET_ID'"
-    echo "GITHUB_REPO='$GITHUB_REPO'"
-    echo "GITHUB_ORG='$GITHUB_ORG'"
-    echo "GIT_NO_VERIFY_FLAG='$GIT_NO_VERIFY_FLAG'"
-    echo "GIT_HOOKS_ENABLED=$GIT_HOOKS_ENABLED"
+    echo "export MAIN_BRANCH='$MAIN_BRANCH'"
+    echo "export REVIEW_BRANCH_NAME='$REVIEW_BRANCH_NAME'"
+    echo "export STARTING_POINT_HASH='$STARTING_POINT_HASH'"
+    echo "export CANONICAL_TICKET_ID='$CANONICAL_TICKET_ID'"
+    echo "export GITHUB_REPO='$GITHUB_REPO'"
+    echo "export GITHUB_ORG='$GITHUB_ORG'"
+    echo "export GIT_NO_VERIFY_FLAG='$GIT_NO_VERIFY_FLAG'"
+    echo "export GIT_HOOKS_ENABLED=$GIT_HOOKS_ENABLED"
 ) > "$STATE_FILE"
 echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$COMMITS_TO_PICK_FILE"
 cp "$COMMITS_TO_PICK_FILE" "$ORIGINAL_COMMITS_FILE"
