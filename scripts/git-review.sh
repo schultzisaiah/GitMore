@@ -324,28 +324,52 @@ perform_cherry_picks() {
         if [ -z "$hash" ]; then continue; fi
 
         echo "  -> Picking $(git show -s --format='%h %s' "$hash")"
-        if ! git cherry-pick -x "$hash"; then
-            echo ""
-            echo "❌ ERROR: Cherry-pick of $hash failed due to a conflict." >&2
-            echo "" >&2
-            echo "--- ACTION REQUIRED ---" >&2
-            echo "1. Open another terminal in this repository." >&2
-            echo "2. Resolve the conflicts in your editor." >&2
-            echo "3. Stage the resolved files: git add <file1> <file2> ..." >&2
-            echo "4. Continue the cherry-pick: git cherry-pick --continue" >&2
-            echo "5. Once that succeeds, resume this script by running: git-review --continue" >&2
-            echo "-----------------------" >&2
-            echo "To give up, run: git-review --abort" >&2
-            exit 1
+        # The 2>&1 redirects stderr to stdout so we can capture all output.
+        if ! git cherry-pick -x "$hash" 2>&1; then
+            # A conflict occurred. Check if rerere fixed it automatically.
+            # We check for the absence of "Unmerged paths" in the status.
+            if ! git status --porcelain | grep -q '^UU'; then
+                echo "  - ✅ Conflict auto-resolved by 'rerere'. Continuing script automatically..."
+                # The conflict was resolved, but the cherry-pick is still paused.
+                # We must continue it to finalize the commit.
+                if ! git cherry-pick --continue; then
+                    # This can happen if the resolution results in an empty commit.
+                    echo "  - ⚠️ 'git cherry-pick --continue' failed, likely due to an empty commit. Skipping."
+                    git cherry-pick --abort
+                fi
+            else
+                # This is a new conflict that rerere couldn't handle.
+                # Exit and ask the user to resolve it manually.
+                echo ""
+                echo "❌ ERROR: Cherry-pick of $hash failed due to a new conflict." >&2
+                echo "" >&2
+                echo "--- ACTION REQUIRED ---" >&2
+                echo "1. Open another terminal in this repository." >&2
+                echo "2. Resolve the conflicts in your editor." >&2
+                echo "3. Stage the resolved files: git add <file1> <file2> ..." >&2
+                echo "4. Continue the cherry-pick: git cherry-pick --continue" >&2
+                echo "5. Once that succeeds, resume this script by running: git-review --continue" >&2
+                echo "-----------------------" >&2
+                echo "To give up, run: git-review --abort" >&2
+                exit 1
+            fi
         fi
 
         # Success! Record the new hash and remove the old one from the pending list.
+        # This part runs for both successful picks and auto-resolved picks.
         git rev-parse HEAD >> "$NEW_HASHES_FILE"
-        # Use tail to remove the processed line from the file.
         tail -n +2 "$COMMITS_TO_PICK_FILE" > "$COMMITS_TO_PICK_FILE.tmp" && mv "$COMMITS_TO_PICK_FILE.tmp" "$COMMITS_TO_PICK_FILE"
 
     done < "$COMMITS_TO_PICK_FILE"
+
+    # After the loop, check if there are any commits left to pick. If so, something went wrong.
+    if [ -s "$COMMITS_TO_PICK_FILE" ]; then
+        # The file is not empty, indicating an incomplete process.
+        # This case should ideally not be hit with the new logic, but serves as a safeguard.
+        echo "⚠️  Warning: Cherry-pick loop finished, but there are still commits pending. Please check the state."
+    fi
 }
+
 
 # --- Command Handlers for continue/abort ---
 
