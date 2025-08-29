@@ -4,14 +4,18 @@
 # Git Long-Lived Review Script
 # ---
 #
-# This script creates a "virtual" branch containing all commits for a specific
-# ticket ID. It intelligently combines commits from main and the remote review
-# branch, and then creates/updates a PR, auto-assigning commit authors and
-# linking to related PRs in other repositories.
+# This script creates and maintains a "virtual" branch containing all commits
+# for a specific ticket ID.
 #
-# Includes a conflict-resolution workflow. If a cherry-pick fails,
-# the script will provide instructions and can be resumed with `git-review --continue`.
-# It also enables 'git rerere' to automatically resolve recurring conflicts.
+# MODE OF OPERATION:
+# 1. Create Mode: If a remote review branch doesn't exist, this script
+#    creates it from scratch by cherry-picking all related commits.
+# 2. Update Mode: If a remote review branch already exists, the script
+#    intelligently finds which commits are new and appends them without
+#    force-pushing or changing existing commit SHAs.
+#
+# This updated logic prevents downstream integrations (like ADO/Jira) from
+# seeing hundreds of duplicate/invalidated commits.
 #
 # DEPENDENCIES:
 # - git
@@ -167,13 +171,27 @@ runPostCherryPickActions() {
     echo "✅ All commits have been processed."
     source "$STATE_FILE" # Load variables like GITHUB_REPO, etc.
 
-    # Push the branch to the remote
-    echo "📤 Force-pushing '$REVIEW_BRANCH_NAME' to origin..."
+    # Push the branch to the remote. No longer force-pushes.
+    echo "📤 Pushing '$REVIEW_BRANCH_NAME' to origin..."
     if ! $GIT_HOOKS_ENABLED; then
       echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
     fi
-    git push -f $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
-    if [ $? -ne 0 ]; then echo "❌ Error: Failed to push to origin."; exit 1; fi
+
+    # If the remote branch exists, we do a normal push.
+    # If not, it's a first-time push, so we set the upstream branch.
+    if git rev-parse --verify "origin/$REVIEW_BRANCH_NAME" >/dev/null 2>&1; then
+        git push $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+    else
+        git push --set-upstream $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+    fi
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: Failed to push to origin." >&2
+        echo "   This can happen if the remote branch has changes you don't have locally." >&2
+        echo "   To fix, you can delete the remote branch and let the script recreate it:" >&2
+        echo "   git push origin --delete $REVIEW_BRANCH_NAME" >&2
+        exit 1
+    fi
     echo "✅ Branch pushed successfully."
 
     # Find commit authors
@@ -431,7 +449,7 @@ handle_abort() {
     review_branch_from_state=$(grep 'REVIEW_BRANCH_NAME=' "$STATE_FILE" | cut -d"'" -f2)
 
     if git show-ref --verify --quiet "refs/heads/$review_branch_from_state"; then
-        echo "  - Deleting temporary review branch '$review_branch_from_state'..."
+        echo "  - Deleting temporary local branch '$review_branch_from_state'..."
         git branch -D "$review_branch_from_state"
     fi
 
@@ -570,36 +588,70 @@ fi
 COMMIT_HASHES=$(echo "${UNIQUE_HASHES[@]}" | tr ' ' '\n' | git rev-list --stdin --reverse --no-walk)
 COMMIT_ARRAY=("${(@f)COMMIT_HASHES}")
 
-# 10. Determine starting point
-FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
-STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
-if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not find starting point."; exit 1; fi
-
-# --- State Setup for a fresh run ---
+# --- State Setup ---
 echo "📝 Setting up state for a resumable operation..."
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 (
     echo "export MAIN_BRANCH='$MAIN_BRANCH'"
     echo "export REVIEW_BRANCH_NAME='$REVIEW_BRANCH_NAME'"
-    echo "export STARTING_POINT_HASH='$STARTING_POINT_HASH'"
     echo "export CANONICAL_TICKET_ID='$CANONICAL_TICKET_ID'"
     echo "export GITHUB_REPO='$GITHUB_REPO'"
     echo "export GITHUB_ORG='$GITHUB_ORG'"
     echo "export GIT_NO_VERIFY_FLAG='$GIT_NO_VERIFY_FLAG'"
     echo "export GIT_HOOKS_ENABLED=$GIT_HOOKS_ENABLED"
 ) > "$STATE_FILE"
-echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$COMMITS_TO_PICK_FILE"
-cp "$COMMITS_TO_PICK_FILE" "$ORIGINAL_COMMITS_FILE"
-touch "$NEW_HASHES_FILE"
 
-# 11. Create or reset the review branch
-if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
-  git branch -D "$REVIEW_BRANCH_NAME"
+# --- Main Logic: Decide between Create and Update Mode ---
+
+if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
+    # --- UPDATE MODE ---
+    echo "🔄 Found existing remote branch. Proceeding with incremental update."
+    git checkout -t "$REMOTE_REVIEW_BRANCH"
+    git pull
+
+    APPLIED_COMMITS_FILE="$STATE_DIR/applied_commits.txt"
+    ALL_DESIRED_COMMITS_FILE="$STATE_DIR/all_desired_commits.txt"
+
+    # Get original SHAs from the messages of commits already on the branch
+    git log --pretty=%b | grep "(cherry picked from commit" | sed -e 's/.*commit //' -e 's/)//' > "$APPLIED_COMMITS_FILE"
+
+    # The full list of commits we want on the branch
+    echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$ALL_DESIRED_COMMITS_FILE"
+    # The original commits that are ALREADY applied
+    cp "$APPLIED_COMMITS_FILE" "$ORIGINAL_COMMITS_FILE"
+    # The SHAs of the applied commits (the copies on the review branch)
+    git log --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+
+    # Determine which new commits need to be picked
+    grep -v -x -f "$APPLIED_COMMITS_FILE" "$ALL_DESIRED_COMMITS_FILE" > "$COMMITS_TO_PICK_FILE"
+
+    if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
+        echo "✅ Review branch is already up-to-date. Nothing to do."
+        git checkout "$MAIN_BRANCH" > /dev/null 2>&1
+        rm -rf "$STATE_DIR"
+        exit 0
+    fi
+    echo "➕ Found $(wc -l < "$COMMITS_TO_PICK_FILE") new commit(s) to apply."
+else
+    # --- CREATE MODE ---
+    echo "🌿 No existing remote branch found. Creating a new review branch."
+    FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
+    STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
+    if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not find starting point."; exit 1; fi
+    echo "export STARTING_POINT_HASH='$STARTING_POINT_HASH'" >> "$STATE_FILE"
+
+    echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$COMMITS_TO_PICK_FILE"
+    cp "$COMMITS_TO_PICK_FILE" "$ORIGINAL_COMMITS_FILE"
+    touch "$NEW_HASHES_FILE" # Start with an empty file for new hashes
+
+    if git show-ref --verify --quiet "refs/heads/$REVIEW_BRANCH_NAME"; then
+      git branch -D "$REVIEW_BRANCH_NAME"
+    fi
+    git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 fi
-git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 
-# 12. Source the environment and start the process
+# 12. Source the environment and start the cherry-pick process for either mode
 source "$STATE_FILE"
 perform_cherry_picks
 runPostCherryPickActions
