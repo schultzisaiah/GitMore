@@ -8,14 +8,16 @@
 # for a specific ticket ID.
 #
 # MODE OF OPERATION:
-# 1. Create Mode: If a remote review branch doesn't exist, this script
-#    creates it from scratch by cherry-picking all related commits.
-# 2. Update Mode: If a remote review branch already exists, the script
-#    intelligently finds which commits are new and appends them without
-#    force-pushing or changing existing commit SHAs.
+# This script now uses a hybrid approach to be both quiet and resilient.
 #
-# This updated logic prevents downstream integrations (like ADO/Jira) from
-# seeing hundreds of duplicate/invalidated commits.
+# 1. Append Mode (No Force-Push): For the common case of adding new commits or
+#    manual fixes to the review branch. The script appends new commits without
+#    rewriting history, keeping integrations like ADO/Jira clean.
+#
+# 2. Rebuild Mode (Force-Push): If the script detects that the original commit
+#    history on the main branch has been rewritten (e.g., via `commit --amend`
+#    or rebase), it knows a simple append is unsafe. It will automatically
+#    fall back to rebuilding the branch from scratch to ensure correctness.
 #
 # DEPENDENCIES:
 # - git
@@ -110,8 +112,10 @@ checkForUpdates() {
 buildCommitListBody() {
     local pr_url_for_links=$1
     local commit_list_body=""
+    # This file will always contain the full list of desired original commits.
     local original_commits_array=("${(@f)"$(cat "$ORIGINAL_COMMITS_FILE")"}")
     local new_hashes_array=("${(@f)"$(cat "$NEW_HASHES_FILE")"}")
+
 
     # Build the map from original to new hashes
     typeset -A original_to_new_hash_map
@@ -171,18 +175,22 @@ runPostCherryPickActions() {
     echo "✅ All commits have been processed."
     source "$STATE_FILE" # Load variables like GITHUB_REPO, etc.
 
-    # Push the branch to the remote. No longer force-pushes.
     echo "📤 Pushing '$REVIEW_BRANCH_NAME' to origin..."
     if ! $GIT_HOOKS_ENABLED; then
       echo "🤫 Git hooks are disabled for this script's operations (using --no-verify)."
     fi
 
-    # If the remote branch exists, we do a normal push.
-    # If not, it's a first-time push, so we set the upstream branch.
-    if git rev-parse --verify "origin/$REVIEW_BRANCH_NAME" >/dev/null 2>&1; then
-        git push $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+    if [ "$FORCE_PUSH" = "true" ]; then
+        echo "   (Force-pushing to reflect rewritten history...)"
+        git push -f $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
     else
-        git push --set-upstream $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+        # If the remote branch exists, we do a normal push.
+        # If not, it's a first-time push, so we set the upstream branch.
+        if git rev-parse --verify "origin/$REVIEW_BRANCH_NAME" >/dev/null 2>&1; then
+            git push $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+        else
+            git push --set-upstream $GIT_NO_VERIFY_FLAG origin "$REVIEW_BRANCH_NAME"
+        fi
     fi
 
     if [ $? -ne 0 ]; then
@@ -568,11 +576,19 @@ MAIN_BRANCH_COMMITS=(${(f)"$(git log "$MAIN_BRANCH" --grep="$CANONICAL_TICKET_ID
 REMOTE_REVIEW_BRANCH="origin/$REVIEW_BRANCH_NAME"
 REMOTE_BRANCH_COMMITS_RAW=()
 if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
-    MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REMOTE_REVIEW_BRANCH")
-    if [ -n "$MERGE_BASE" ]; then
-      REMOTE_BRANCH_COMMITS_RAW=(${(f)"$(git log "$MERGE_BASE..$REMOTE_REVIEW_BRANCH" --pretty=format:"%H")"})
+    # In update mode, we only care about commits on main, as commits on the review branch are already "applied".
+    # This prevents finding the same commit twice (once on main, once on the review branch)
+    : # This is a no-op, we just want to avoid the else block.
+else
+    # In create mode, we need to check if the review branch exists locally but not remotely
+    if git rev-parse --verify "$REVIEW_BRANCH_NAME" >/dev/null 2>&1; then
+        MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "$REVIEW_BRANCH_NAME")
+        if [ -n "$MERGE_BASE" ]; then
+          REMOTE_BRANCH_COMMITS_RAW=(${(f)"$(git log "$MERGE_BASE..$REVIEW_BRANCH_NAME" --pretty=format:"%H")"})
+        fi
     fi
 fi
+
 ALL_CANDIDATE_HASHES=("${MAIN_BRANCH_COMMITS[@]}" "${REMOTE_BRANCH_COMMITS_RAW[@]}")
 typeset -A patch_ids_to_hashes
 for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
@@ -602,40 +618,62 @@ mkdir -p "$STATE_DIR"
     echo "export GIT_HOOKS_ENABLED=$GIT_HOOKS_ENABLED"
 ) > "$STATE_FILE"
 
-# --- Main Logic: Decide between Create and Update Mode ---
+# --- Main Logic: Decide between Create, Append, and Rebuild Mode ---
 
 if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
-    # --- UPDATE MODE ---
-    echo "🔄 Found existing remote branch. Proceeding with incremental update."
-    git checkout -t "$REMOTE_REVIEW_BRANCH"
+    # --- UPDATE LOGIC ---
+    git checkout -B "$REVIEW_BRANCH_NAME" "$REMOTE_REVIEW_BRANCH"
     git pull
 
-    APPLIED_COMMITS_FILE="$STATE_DIR/applied_commits.txt"
     ALL_DESIRED_COMMITS_FILE="$STATE_DIR/all_desired_commits.txt"
+    echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$ALL_DESIRED_COMMITS_FILE"
 
-    # Get original SHAs from the messages of commits already on the branch
+    APPLIED_COMMITS_FILE="$STATE_DIR/applied_commits.txt"
     git log --pretty=%b | grep "(cherry picked from commit" | sed -e 's/.*commit //' -e 's/)//' > "$APPLIED_COMMITS_FILE"
 
-    # The full list of commits we want on the branch
-    echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$ALL_DESIRED_COMMITS_FILE"
-    # The original commits that are ALREADY applied
-    cp "$APPLIED_COMMITS_FILE" "$ORIGINAL_COMMITS_FILE"
-    # The SHAs of the applied commits (the copies on the review branch)
-    git log --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+    COMMITS_TO_REMOVE_FILE="$STATE_DIR/commits_to_remove.txt"
+    grep -v -x -f "$ALL_DESIRED_COMMITS_FILE" "$APPLIED_COMMITS_FILE" > "$COMMITS_TO_REMOVE_FILE"
 
-    # Determine which new commits need to be picked
-    grep -v -x -f "$APPLIED_COMMITS_FILE" "$ALL_DESIRED_COMMITS_FILE" > "$COMMITS_TO_PICK_FILE"
+    if [ -s "$COMMITS_TO_REMOVE_FILE" ]; then
+        # --- REBUILD MODE ---
+        echo "⚠️  Detected rewritten history on main (e.g., an amended commit)."
+        echo "   Rebuilding the review branch from scratch to match. This will require a force-push."
+        echo "export FORCE_PUSH='true'" >> "$STATE_FILE"
 
-    if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
-        echo "✅ Review branch is already up-to-date. Nothing to do."
-        git checkout "$MAIN_BRANCH" > /dev/null 2>&1
-        rm -rf "$STATE_DIR"
-        exit 0
+        FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
+        STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
+        if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not find starting point."; exit 1; fi
+        echo "export STARTING_POINT_HASH='$STARTING_POINT_HASH'" >> "$STATE_FILE"
+
+        echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$COMMITS_TO_PICK_FILE"
+        cp "$COMMITS_TO_PICK_FILE" "$ORIGINAL_COMMITS_FILE"
+        touch "$NEW_HASHES_FILE"
+
+        git checkout -B "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
+    else
+        # --- APPEND MODE ---
+        echo "🔄 Found existing remote branch. Proceeding with incremental update."
+        echo "export FORCE_PUSH='false'" >> "$STATE_FILE"
+
+        grep -v -x -f "$APPLIED_COMMITS_FILE" "$ALL_DESIRED_COMMITS_FILE" > "$COMMITS_TO_PICK_FILE"
+
+        cp "$ALL_DESIRED_COMMITS_FILE" "$ORIGINAL_COMMITS_FILE"
+        git log --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+
+        if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
+            echo "✅ Review branch is already up-to-date. Nothing to do."
+            git checkout "$MAIN_BRANCH" > /dev/null 2>&1
+            rm -rf "$STATE_DIR"
+            # We still run PR updates to catch manual description changes or link other PRs
+        else
+            echo "➕ Found $(wc -l < "$COMMITS_TO_PICK_FILE") new commit(s) to apply."
+        fi
     fi
-    echo "➕ Found $(wc -l < "$COMMITS_TO_PICK_FILE") new commit(s) to apply."
 else
     # --- CREATE MODE ---
     echo "🌿 No existing remote branch found. Creating a new review branch."
+    echo "export FORCE_PUSH='true'" >> "$STATE_FILE"
+
     FIRST_COMMIT_HASH="${COMMIT_ARRAY[1]}"
     STARTING_POINT_HASH=$(git rev-parse "$FIRST_COMMIT_HASH^")
     if [ -z "$STARTING_POINT_HASH" ]; then echo "❌ Error: Could not find starting point."; exit 1; fi
@@ -651,7 +689,12 @@ else
     git checkout -b "$REVIEW_BRANCH_NAME" "$STARTING_POINT_HASH"
 fi
 
-# 12. Source the environment and start the cherry-pick process for either mode
+# 12. Source the environment and start the process
 source "$STATE_FILE"
-perform_cherry_picks
+
+# Only run cherry-picks if there's something to pick
+if [ -s "$COMMITS_TO_PICK_FILE" ]; then
+    perform_cherry_picks
+fi
 runPostCherryPickActions
+
