@@ -204,7 +204,7 @@ runPostCherryPickActions() {
 
     # Find commit authors
     local original_commits_array=("${(@f)"$(cat "$ORIGINAL_COMMITS_FILE")"}")
-    echo "👥 Finding commit authors to assign to the PR..."
+    echo "👥 Finding commit authors to assign to the PR... (this may take longer than it feels like it should)"
     ASSIGNEES=()
     for hash in "${original_commits_array[@]}"; do
         login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty' 2>/dev/null)
@@ -232,7 +232,7 @@ EOF
 )
 
     if [ -z "$EXISTING_PR_URL" ]; then
-        echo "🤝 No existing PR found. Creating a new draft PR..."
+        echo "🤝 No existing PR found. Creating a new draft PR... (this may take longer than it feels like it should)"
         PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
         COMMIT_LIST_BODY=$(buildCommitListBody "")
         FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
@@ -250,7 +250,7 @@ EOF
             echo "❌ Error: Failed to create Pull Request."
         fi
     else
-        echo "✅ Existing PR found. Updating..."
+        echo "✅ Existing PR found. Updating... (this may take longer than it feels like it should)"
         COMMIT_LIST_BODY=$(buildCommitListBody "$EXISTING_PR_URL")
         FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
         gh pr edit "$EXISTING_PR_URL" --body "$FINAL_PR_BODY"
