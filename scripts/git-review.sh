@@ -636,7 +636,14 @@ if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
 
     if [ -s "$COMMITS_TO_REMOVE_FILE" ]; then
         # --- REBUILD MODE ---
-        echo "⚠️  Detected rewritten history on main (e.g., an amended commit)."
+        echo "⚠️  Detected rewritten history on main."
+        echo "   The following commits are on the review branch but are no longer part of the desired history:"
+        while IFS= read -r hash; do
+            if [ -n "$hash" ]; then
+                echo "     - $(git show -s --format='%h %s' "$hash")"
+            fi
+        done < "$COMMITS_TO_REMOVE_FILE"
+        echo "   This typically happens if an original commit was amended or rebased."
         echo "   Rebuilding the review branch from scratch to match. This will require a force-push."
         echo "export FORCE_PUSH='true'" >> "$STATE_FILE"
 
@@ -662,9 +669,9 @@ if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
 
         if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
             echo "✅ Review branch is already up-to-date. Nothing to do."
-            git checkout "$MAIN_BRANCH" > /dev/null 2>&1
-            rm -rf "$STATE_DIR"
-            # We still run PR updates to catch manual description changes or link other PRs
+            # We still run PR updates to catch manual description changes or link other PRs.
+            # Set commits to pick to empty to skip the cherry-pick step but still run post-actions.
+            > "$COMMITS_TO_PICK_FILE"
         else
             echo "➕ Found $(wc -l < "$COMMITS_TO_PICK_FILE") new commit(s) to apply."
         fi
