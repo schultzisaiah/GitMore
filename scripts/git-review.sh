@@ -204,7 +204,7 @@ runPostCherryPickActions() {
 
     # Find commit authors
     local original_commits_array=("${(@f)"$(cat "$ORIGINAL_COMMITS_FILE")"}")
-    echo "👥 Finding commit authors to assign to the PR... (this may take longer than it feels like it should)"
+    echo "👥 Finding commit authors to assign to the PR..."
     ASSIGNEES=()
     for hash in "${original_commits_array[@]}"; do
         login=$(gh api "repos/$GITHUB_REPO/commits/$hash" --jq '.author.login // empty' 2>/dev/null)
@@ -628,8 +628,18 @@ if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
     ALL_DESIRED_COMMITS_FILE="$STATE_DIR/all_desired_commits.txt"
     echo "${COMMIT_ARRAY[@]}" | tr ' ' '\n' > "$ALL_DESIRED_COMMITS_FILE"
 
+    # Find the point where this review branch diverged from the main branch.
+    MERGE_BASE=$(git merge-base "$MAIN_BRANCH" "HEAD")
+
     APPLIED_COMMITS_FILE="$STATE_DIR/applied_commits.txt"
-    git log --pretty=%b | grep "(cherry picked from commit" | sed -e 's/.*commit //' -e 's/)//' > "$APPLIED_COMMITS_FILE"
+    # Only look for cherry-pick messages in the commits that are *unique* to this review branch.
+    # Without the "$MERGE_BASE..HEAD" range, it would scan the entire history of main as well.
+    if [ -n "$MERGE_BASE" ]; then
+        git log "$MERGE_BASE..HEAD" --pretty=%b | grep "(cherry picked from commit" | sed -e 's/.*commit //' -e 's/)//' > "$APPLIED_COMMITS_FILE"
+    else
+        # If there's no merge base, it means the histories are unrelated, so we check the whole branch history.
+        git log HEAD --pretty=%b | grep "(cherry picked from commit" | sed -e 's/.*commit //' -e 's/)//' > "$APPLIED_COMMITS_FILE"
+    fi
 
     COMMITS_TO_REMOVE_FILE="$STATE_DIR/commits_to_remove.txt"
     grep -v -x -f "$ALL_DESIRED_COMMITS_FILE" "$APPLIED_COMMITS_FILE" > "$COMMITS_TO_REMOVE_FILE"
@@ -665,7 +675,12 @@ if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
         grep -v -x -f "$APPLIED_COMMITS_FILE" "$ALL_DESIRED_COMMITS_FILE" > "$COMMITS_TO_PICK_FILE"
 
         cp "$ALL_DESIRED_COMMITS_FILE" "$ORIGINAL_COMMITS_FILE"
-        git log --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+        # Re-populating NEW_HASHES_FILE needs the same scoping as APPLIED_COMMITS_FILE
+        if [ -n "$MERGE_BASE" ]; then
+            git log "$MERGE_BASE..HEAD" --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+        else
+            git log HEAD --pretty=%H --grep "(cherry picked from commit" --reverse > "$NEW_HASHES_FILE"
+        fi
 
         if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
             echo "✅ Review branch is already up-to-date. Nothing to do."
