@@ -232,7 +232,9 @@ EOF
 )
 
     if [ -z "$EXISTING_PR_URL" ]; then
-        echo "🤝 No existing PR found. Creating a new draft PR... (this may take longer than it feels like it should)"
+        echo "🤝 No existing PR found. Creating a new draft PR..."
+        echo "  (this may take longer than it feels like it should"
+        echo "   due to the gh cli/api latency)"
         PR_TITLE="[REVIEW-ONLY] Feature: $CANONICAL_TICKET_ID"
         COMMIT_LIST_BODY=$(buildCommitListBody "")
         FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
@@ -250,7 +252,9 @@ EOF
             echo "❌ Error: Failed to create Pull Request."
         fi
     else
-        echo "✅ Existing PR found. Updating... (this may take longer than it feels like it should)"
+        echo "✅ Existing PR found. Updating..."
+        echo "  (this may take longer than it feels like it should"
+        echo "   due to the gh cli/api latency)"
         COMMIT_LIST_BODY=$(buildCommitListBody "$EXISTING_PR_URL")
         FINAL_PR_BODY="${PR_BODY_HEADER}${COMMIT_LIST_BODY}"
         gh pr edit "$EXISTING_PR_URL" --body "$FINAL_PR_BODY"
@@ -516,7 +520,7 @@ echo "🌿 Review branch will be: $REVIEW_BRANCH_NAME"
 
 # 5. Pre-flight Checks
 if [ -n "$(git status --porcelain)" ]; then
-  echo "❌ Error: Your workspace has uncommitted changes." >&2
+  echo "❌ Error: Your workspace is not ready. Please ensure you are on the main branch and shelve any uncommitted changes." >&2
   exit 1
 fi
 local missing_deps=()
