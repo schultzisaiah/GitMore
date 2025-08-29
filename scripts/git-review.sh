@@ -684,9 +684,10 @@ if git rev-parse --verify "$REMOTE_REVIEW_BRANCH" >/dev/null 2>&1; then
 
         if [ ! -s "$COMMITS_TO_PICK_FILE" ]; then
             echo "✅ Review branch is already up-to-date. Nothing to do."
-            # We still run PR updates to catch manual description changes or link other PRs.
-            # Set commits to pick to empty to skip the cherry-pick step but still run post-actions.
-            > "$COMMITS_TO_PICK_FILE"
+            # PRs won't be cross-linked until a new commit is added.
+            git checkout "$MAIN_BRANCH" > /dev/null 2>&1
+            rm -rf "$STATE_DIR"
+            exit 0
         else
             echo "➕ Found $(wc -l < "$COMMITS_TO_PICK_FILE") new commit(s) to apply."
         fi
