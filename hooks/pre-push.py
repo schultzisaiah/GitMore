@@ -338,17 +338,18 @@ def main():
   # --- Configuration Check ---
   print_status("🔧", "Checking configuration...")
   is_setup_complete = True
-  if TOKEN == "TODO" or not TOKEN:
-    print_status("⚠️ ", "ADO_TOKEN is not set. Please set it as an env variable or in your shell config file.", is_warning=True)
-    is_setup_complete = False
-  else:
-    print_status("✅", "ADO Token is configured.")
-
   if TAG_VALUE == "App:TODO":
-    print_status("⚠️ ", "TAG_VALUE is not configured. Please edit the 'TAG_VALUE' variable in the script.", is_warning=True)
+    print_status("❌", "The 'TAG_VALUE' is still a 'TODO'. Please update the script's configuration.", is_error=True)
+    is_setup_complete = False
+  elif TOKEN == "TODO" or not TOKEN:
+    print_status("❌", "The 'ADO_TOKEN' is not set. Please set it as an environment variable or in your shell config file.", is_error=True)
     is_setup_complete = False
   else:
-    print_status("✅", "ADO Tag is configured.")
+    print_status("✅", "ADO configuration OK.")
+
+  # Abort the push if configuration is not complete
+  if not is_setup_complete:
+    sys.exit(1)
 
   # --- Run Tests ---
   if not run_gradle_tests():
@@ -359,11 +360,6 @@ def main():
   stdin_lines = sys.stdin.readlines()
   if not stdin_lines:
     print_status("🤷", "No input from git. Nothing to process.", is_warning=True)
-    print_status("🏁", "--- Pre-Push Hook Finished ---")
-    return
-
-  if not is_setup_complete:
-    print_status("🤷", "Skipping ADO integration due to incomplete setup.", is_warning=True)
     print_status("🏁", "--- Pre-Push Hook Finished ---")
     return
 
