@@ -101,14 +101,15 @@ TOKEN = os.getenv('ADO_TOKEN') or get_token_from_shell_config() or 'TODO'
 
 # --- Helper for Styled Output ---
 def print_status(icon, message, is_warning=False, is_error=False):
-  """Prints a formatted status message with an icon."""
+  """
+  Prints a formatted status message with an icon and flushes the output buffer.
+  """
   if is_error:
-    # Print errors to stderr
-    print(f"❌ ERROR: {message}", file=sys.stderr)
+    print(f"❌ ERROR: {message}", file=sys.stderr, flush=True)
   elif is_warning:
-    print(f"⚠️  WARN: {message}", file=sys.stdout)
+    print(f"⚠️  WARN: {message}", file=sys.stdout, flush=True)
   else:
-    print(f"{icon} {message}", file=sys.stdout)
+    print(f"{icon} {message}", file=sys.stdout, flush=True)
 
 def check_for_updates():
   """
@@ -141,7 +142,7 @@ def check_for_updates():
 #
 ###############################################################
 """
-      print(update_box, file=sys.stdout)
+      print(update_box, file=sys.stdout, flush=True)
       print_status("⚠️ ", "Update available. Proceeding with push...", is_warning=True)
     else:
       print_status("✅", "Script is up to date.")
