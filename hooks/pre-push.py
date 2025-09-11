@@ -183,6 +183,7 @@ def run_gradle_tests():
   Returns True if tests pass, False otherwise.
   """
   gradlew_path = './gradlew'
+  project_jdk_path_file = '.jdk_path'
 
   # First, check if the gradlew file exists at all.
   if not os.path.isfile(gradlew_path):
@@ -198,12 +199,25 @@ def run_gradle_tests():
 
   print_status("🧪", "Running Gradle tests...")
   try:
+    try:
+      # Check if the project has a custom JDK already set
+      with open(project_jdk_path_file, 'r') as f:
+        java_home_path = f.read().strip()
+
+      # Set JAVA_HOME for the script's execution environment
+      os.environ['JAVA_HOME'] = java_home_path
+      print_status("✅", f"Using project-specific JDK from {project_jdk_path_file}")
+
+    except FileNotFoundError:
+      # If the file is not found, print a warning and continue.
+      # The script will use the system's default JAVA_HOME.
+      print_status("⚠️ ", f"{project_jdk_path_file} not found. Using system's default JDK.", is_warning=True)
     # Using check_output to capture stdout/stderr if needed, and it raises an error on failure
     check_output([gradlew_path, 'test'], stderr=sys.stdout)
     print_status("✅", "Gradle tests passed successfully.")
     return True
   except CalledProcessError as e:
-    print_status("❌", f"Gradle tests failed. See output above for details.", is_error=True)
+    print_status("❌", "Gradle tests failed. See output above for details.", is_error=True)
     return False
   except FileNotFoundError:
     # This is a fallback, but the os.path.isfile check should catch this.
