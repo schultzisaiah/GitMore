@@ -64,6 +64,8 @@ ADO_PROJECT = "FindLaw"
 # A list of branch prefixes. If a branch being pushed to starts with any of these
 # strings, ADO processing will be skipped for that branch.
 BRANCHES_TO_SKIP = ['CR/']
+# URL to check for updates
+UPDATE_URL = "https://raw.githubusercontent.com/schultzisaiah/GitMore/refs/heads/main/hooks/pre-push.py"
 
 def get_token_from_shell_config():
   """
@@ -108,6 +110,46 @@ def print_status(icon, message, is_warning=False, is_error=False):
   else:
     print(f"{icon} {message}", file=sys.stdout)
 
+def check_for_updates():
+  """
+  Checks for updates to the script from the specified URL.
+  Prints a large warning box if a new version is found.
+  """
+  print_status("🔎", "Checking for updates...")
+  try:
+    response = requests.get(UPDATE_URL, timeout=5)
+    response.raise_for_status()
+    remote_lines = response.text.strip().splitlines()
+
+    with open(__file__, 'r') as f:
+      local_lines = f.read().strip().splitlines()
+
+    # Filter out the TAG_VALUE line from both files before comparison
+    tag_line_prefix = "TAG_VALUE ="
+    filtered_remote_lines = [line for line in remote_lines if not line.strip().startswith(tag_line_prefix)]
+    filtered_local_lines = [line for line in local_lines if not line.strip().startswith(tag_line_prefix)]
+
+    if filtered_local_lines != filtered_remote_lines:
+      update_box = f"""
+###############################################################
+#
+#    ✨✨ A NEW VERSION OF THIS SCRIPT IS AVAILABLE! ✨✨
+#
+#    Please update when you are ready by replacing this
+#      file with the latest version from:
+#    {UPDATE_URL}
+#
+###############################################################
+"""
+      print(update_box, file=sys.stdout)
+      print_status("⚠️ ", "Update available. Proceeding with push...", is_warning=True)
+    else:
+      print_status("✅", "Script is up to date.")
+
+  except requests.exceptions.RequestException as e:
+    print_status("⚠️ ", f"Could not check for updates. Skipping. Error: {e}", is_warning=True)
+  except FileNotFoundError:
+    print_status("⚠️ ", "Could not find local script file to check for updates. Skipping.", is_warning=True)
 
 def get_default_branch():
   """
@@ -330,6 +372,7 @@ def main():
   Main function for the pre-push hook.
   """
   print_status("🚀", "--- Starting Pre-Push Hook ---")
+  check_for_updates()
 
   default_branch = get_default_branch()
   if not default_branch:
