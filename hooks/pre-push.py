@@ -344,6 +344,12 @@ def main():
   else:
     print_status("✅", "ADO Token is configured.")
 
+  if TAG_VALUE == "App:TODO":
+    print_status("⚠️ ", "TAG_VALUE is not configured. Please edit the 'TAG_VALUE' variable in the script.", is_warning=True)
+    is_setup_complete = False
+  else:
+    print_status("✅", "ADO Tag is configured.")
+
   # --- Run Tests ---
   if not run_gradle_tests():
     print_status("❌", "Tests failed. Aborting push.", is_error=True)
