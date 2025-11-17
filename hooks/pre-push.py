@@ -59,8 +59,8 @@ with contextlib.redirect_stderr(io.StringIO()):
 # The tag to add to the ADO work item
 TAG_VALUE = "App:TODO"
 # Your Azure DevOps organization and project details
-ADO_ORG = "tr-legal-tech"
-ADO_PROJECT = "FindLaw"
+ADO_ORG = "Findlaw" # ugh that lowercase 'l' hurts my eyes
+ADO_PROJECT = "FindLawADO"
 # A list of branch prefixes. If a branch being pushed to starts with any of these
 # strings, ADO processing will be skipped for that branch.
 BRANCHES_TO_SKIP = ['CR/']
