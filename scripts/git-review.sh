@@ -598,7 +598,10 @@ typeset -A patch_ids_to_hashes
 for hash in "${ALL_CANDIDATE_HASHES[@]}"; do
     if [ -z "$hash" ]; then continue; fi
     patch_id=$(git show "$hash" | git patch-id | cut -d' ' -f1)
-    if [[ ! -v patch_ids_to_hashes[$patch_id] ]]; then patch_ids_to_hashes[$patch_id]=$hash; fi
+    # Only process if we successfully got a patch ID (skips merge commits)
+    if [ -n "$patch_id" ]; then
+        if [[ ! -v patch_ids_to_hashes[$patch_id] ]]; then patch_ids_to_hashes[$patch_id]=$hash; fi
+    fi
 done
 UNIQUE_HASHES=("${(@v)patch_ids_to_hashes}")
 if [ ${#UNIQUE_HASHES[@]} -eq 0 ]; then
