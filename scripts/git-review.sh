@@ -70,6 +70,51 @@ NEW_HASHES_FILE="$STATE_DIR/new_hashes.txt"
 LOCAL_ONLY=false
 
 
+# --- GitHub Auth Check Function ---
+checkGitHubAuth() {
+    local auth_status
+    auth_status=$(gh auth status 2>&1)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        echo "❌ Error: GitHub CLI authentication issue detected." >&2
+        echo "" >&2
+
+        # Check for specific error types
+        if echo "$auth_status" | grep -qi "token.*expired\|expired.*token"; then
+            echo "🔑 Your GitHub token has EXPIRED." >&2
+        elif echo "$auth_status" | grep -qi "not logged in\|no token"; then
+            echo "🔑 You are NOT LOGGED IN to GitHub CLI." >&2
+        else
+            echo "🔑 Authentication failed. Details:" >&2
+            echo "$auth_status" | head -5 >&2
+        fi
+
+        echo "" >&2
+        echo "--- HOW TO FIX ---" >&2
+        echo "Option 1: Re-authenticate interactively" >&2
+        echo "  Run: gh auth login" >&2
+        echo "  Follow the prompts to authenticate via browser or paste a token." >&2
+        echo "" >&2
+        echo "Option 2: Refresh your existing token" >&2
+        echo "  Run: gh auth refresh" >&2
+        echo "" >&2
+        echo "Option 3: Use a Personal Access Token (PAT)" >&2
+        echo "  1. Create a PAT at: https://github.com/settings/tokens" >&2
+        echo "     Required scopes: repo, read:org, workflow" >&2
+        echo "  2. Run: gh auth login --with-token < your_token_file.txt" >&2
+        echo "     Or:  echo 'YOUR_TOKEN' | gh auth login --with-token" >&2
+        echo "" >&2
+        echo "Option 4: Set the GH_TOKEN environment variable" >&2
+        echo "  Run: export GH_TOKEN='your_personal_access_token'" >&2
+        echo "" >&2
+        echo "For more info: https://cli.github.com/manual/gh_auth_login" >&2
+        echo "------------------" >&2
+        exit 1
+    fi
+}
+
 # --- Self-Update Function ---
 checkForUpdates() {
     local force_check=$1
@@ -581,6 +626,11 @@ if [ ${#missing_deps[@]} -gt 0 ]; then
         echo "  - $dep"
     done
     exit 1
+fi
+
+# Check GitHub CLI authentication (skip in local-only mode)
+if [ "$LOCAL_ONLY" != true ]; then
+    checkGitHubAuth
 fi
 
 # --- Enable git rerere for easier conflict resolution ---
