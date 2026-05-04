@@ -31,14 +31,19 @@
 #
 # USAGE:
 # git-review <TicketID> [MainBranch]
+# git-review <TicketID> --local [MainBranch]
 # git-review --continue
 # git-review --abort
 # git-review --update
 #
+# OPTIONS:
+# --local    Create the review branch locally only, without pushing or creating a PR.
+#
 # EXAMPLES:
 # git-review "AB#1234"
-# git-review "#5678"
+# git-review "#5678" --local
 # git-review "ab5678" develop
+# git-review "ab5678" --local develop
 # git-review --continue
 #
 
@@ -60,6 +65,9 @@ STATE_FILE="$STATE_DIR/state.vars"
 COMMITS_TO_PICK_FILE="$STATE_DIR/commits_to_pick.txt"
 ORIGINAL_COMMITS_FILE="$STATE_DIR/original_commits.txt"
 NEW_HASHES_FILE="$STATE_DIR/new_hashes.txt"
+
+# --- Runtime Flags ---
+LOCAL_ONLY=false
 
 
 # --- Self-Update Function ---
@@ -174,6 +182,17 @@ buildCommitListBody() {
 runPostCherryPickActions() {
     echo "✅ All commits have been processed."
     source "$STATE_FILE" # Load variables like GITHUB_REPO, etc.
+
+    # Skip remote operations if --local flag is set
+    if [ "$LOCAL_ONLY" = true ]; then
+        echo "📍 Local-only mode: Skipping push and PR operations."
+        echo "   Your review branch '$REVIEW_BRANCH_NAME' is ready locally."
+        echo "   To push later, run: git push --set-upstream origin $REVIEW_BRANCH_NAME"
+        echo "🧹 Cleaning up temporary state..."
+        rm -rf "$STATE_DIR"
+        echo "✅ Done!"
+        return
+    fi
 
     echo "📤 Pushing '$REVIEW_BRANCH_NAME' to origin..."
     if ! $GIT_HOOKS_ENABLED; then
@@ -499,16 +518,41 @@ checkForUpdates
 
 # 2. Input Validation (now handled by the case statement)
 
-# 3. Setup Git Hook Flag
+# 3. Parse arguments - handle --local flag and determine TicketID and MainBranch
+TICKET_ID=""
+MAIN_BRANCH_ARG=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --local)
+            LOCAL_ONLY=true
+            ;;
+        *)
+            if [ -z "$TICKET_ID" ]; then
+                TICKET_ID="$arg"
+            else
+                MAIN_BRANCH_ARG="$arg"
+            fi
+            ;;
+    esac
+done
+
+if [ -z "$TICKET_ID" ]; then
+    echo "❌ Error: No Ticket ID provided." >&2
+    echo "Usage: $0 \"<TicketID>\" [--local] [MainBranch]" >&2
+    exit 1
+fi
+
+# 4. Setup Git Hook Flag
 GIT_NO_VERIFY_FLAG=""
 if ! $GIT_HOOKS_ENABLED; then
   GIT_NO_VERIFY_FLAG="--no-verify"
 fi
 
-# 4. Input Processing and Normalization
-TICKET_NUMBER=$(echo "$1" | tr -dc '0-9')
+# 5. Input Processing and Normalization
+TICKET_NUMBER=$(echo "$TICKET_ID" | tr -dc '0-9')
 if [ -z "$TICKET_NUMBER" ]; then
-    echo "❌ Error: Could not find any numbers in the provided Ticket ID '$1'." >&2
+    echo "❌ Error: Could not find any numbers in the provided Ticket ID '$TICKET_ID'." >&2
     exit 1
 fi
 CANONICAL_TICKET_ID="${TICKET_PREFIX}${TICKET_NUMBER}"
@@ -517,6 +561,9 @@ REVIEW_BRANCH_NAME="$REVIEW_BRANCH_PREFIX/$SANITIZED_TICKET_ID"
 
 echo "🚀 Starting review for Ticket ID: $CANONICAL_TICKET_ID"
 echo "🌿 Review branch will be: $REVIEW_BRANCH_NAME"
+if [ "$LOCAL_ONLY" = true ]; then
+    echo "📍 Running in local-only mode (no push, no PR)"
+fi
 
 # 5. Pre-flight Checks
 if [ -n "$(git status --porcelain)" ]; then
@@ -546,8 +593,8 @@ fi
 
 # 6. Determine Main Branch
 MAIN_BRANCH=""
-if [ -n "$2" ]; then
-    MAIN_BRANCH="$2"
+if [ -n "$MAIN_BRANCH_ARG" ]; then
+    MAIN_BRANCH="$MAIN_BRANCH_ARG"
 else
     git fetch origin --prune
     DETECTED_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
@@ -623,6 +670,7 @@ mkdir -p "$STATE_DIR"
     echo "export GITHUB_ORG='$GITHUB_ORG'"
     echo "export GIT_NO_VERIFY_FLAG='$GIT_NO_VERIFY_FLAG'"
     echo "export GIT_HOOKS_ENABLED=$GIT_HOOKS_ENABLED"
+    echo "export LOCAL_ONLY=$LOCAL_ONLY"
 ) > "$STATE_FILE"
 
 # --- Main Logic: Decide between Create, Append, and Rebuild Mode ---
